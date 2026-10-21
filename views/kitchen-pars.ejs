@@ -1,0 +1,47 @@
+<%- include('partials/head', { title: "Par Levels — " + shop.name }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/pars">&larr; All stores</a></p>
+  <h1>Par Levels — <%= shop.name %></h1>
+  <p class="subtitle">
+    Set a par level for any item this store wants stock-based suggestions for. Leave blank for
+    items this store just orders a plain quantity of — those won't show stock fields.
+  </p>
+
+  <% if (saved) { %>
+    <div class="success-banner">Saved.</div>
+  <% } %>
+
+  <form method="POST" action="/kitchen/pars/<%= shop.slug %>">
+    <% categories.forEach(function(cat) { %>
+      <h2><%= cat.name %></h2>
+      <div class="card">
+        <% cat.items.forEach(function(item) { %>
+          <div class="item-row">
+            <div class="item-name">
+              <%= item.name %>
+              <span class="item-unit">/ <%= item.unit %></span>
+            </div>
+            <input
+              type="number"
+              name="par_<%= item.id %>"
+              min="1"
+              step="1"
+              value="<%= parByItemId[item.id] !== undefined ? parByItemId[item.id] : '' %>"
+              placeholder="no par"
+            />
+          </div>
+        <% }) %>
+        <% if (cat.items.length === 0) { %>
+          <p class="muted">No items in this category yet.</p>
+        <% } %>
+      </div>
+    <% }) %>
+
+    <button class="btn btn-filled" type="submit">Save Par Levels</button>
+  </form>
+</div>
+
+</body>
+</html>

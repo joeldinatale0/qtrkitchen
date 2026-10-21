@@ -1,0 +1,50 @@
+<%- include('partials/head', { title: "Manage Items — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Manage Item Catalog</h1>
+  <p class="subtitle">
+    Add, rename, or retire items shops can order.
+    Par levels (current-stock / suggested-order) are set per shop — see
+    <a href="/kitchen/pars">Par Levels</a>.
+  </p>
+
+  <% if (saved) { %>
+    <div class="success-banner">Saved.</div>
+  <% } %>
+
+  <% categories.forEach(function(cat) { %>
+    <h2><%= cat.name %></h2>
+    <div class="card">
+      <% cat.items.forEach(function(item) { %>
+        <div class="admin-item-row" style="<%= item.active ? '' : 'opacity:0.5;' %>">
+          <form method="POST" action="/kitchen/items/<%= item.id %>/update" class="admin-item-form">
+            <input type="text" name="name" value="<%= item.name %>" class="admin-item-name" />
+            <input type="text" name="unit" value="<%= item.unit %>" class="admin-item-unit" placeholder="unit" />
+            <button class="btn btn-small" type="submit">Save</button>
+          </form>
+          <form class="inline-form" method="POST" action="/kitchen/items/<%= item.id %>/toggle">
+            <button class="btn btn-small" type="submit"><%= item.active ? 'Retire' : 'Restore' %></button>
+          </form>
+          <form class="inline-form" method="POST" action="/kitchen/items/<%= item.id %>/delete"
+                onsubmit="return confirm('Delete this item permanently?');">
+            <button class="btn btn-small" type="submit">Delete</button>
+          </form>
+        </div>
+      <% }) %>
+      <% if (cat.items.length === 0) { %>
+        <p class="muted">No items yet.</p>
+      <% } %>
+
+      <form method="POST" action="/kitchen/items" class="toolbar" style="margin-top: 16px; margin-bottom: 0;">
+        <input type="hidden" name="category_id" value="<%= cat.id %>" />
+        <input type="text" name="name" placeholder="New item name" required style="flex: 1; min-width: 160px;" />
+        <input type="text" name="unit" placeholder="Unit (ea, pack, kg...)" style="width: 150px;" />
+        <button class="btn btn-small" type="submit">Add Item</button>
+      </form>
+    </div>
+  <% }) %>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,23 @@
+<%- include('partials/head', { title: 'QTR Kitchen Ordering' }) %>
+
+<div class="container" style="padding-top: 96px;">
+  <div style="text-align: center; margin-bottom: 56px;">
+    <h1 style="margin-bottom: 4px;">QTR Kitchen<br />Ordering</h1>
+    <p class="subtitle" style="margin-bottom: 0;">Select your store to log in.</p>
+  </div>
+
+  <div class="store-grid">
+    <% shops.forEach(function(shop) { %>
+      <a class="store-tile" href="/login/<%= shop.slug %>"><%= shop.name %></a>
+    <% }) %>
+  </div>
+
+  <% if (kitchen) { %>
+    <p style="text-align: center; margin-top: 56px;">
+      <a class="muted" href="/login/<%= kitchen.slug %>">Central Kitchen staff login &rarr;</a>
+    </p>
+  <% } %>
+</div>
+
+</body>
+</html>

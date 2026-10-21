@@ -1,0 +1,88 @@
+<%- include('partials/head', { title: "Kitchen Dashboard — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Orders for <%= formatDate(deliveryDate) %></h1>
+  <p class="subtitle">All shop orders due for delivery on this date.</p>
+
+  <form class="toolbar no-print" method="GET" action="/kitchen">
+    <label style="margin-bottom:0;">Delivery date</label>
+    <input type="date" name="date" value="<%= deliveryDate %>" onchange="this.form.submit()" />
+  </form>
+
+  <h2>Combined Totals</h2>
+  <div class="card">
+    <% if (totalsList.length === 0) { %>
+      <p class="muted">No orders yet for this date.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Unit</th><th>Total Qty</th></tr>
+        </thead>
+        <tbody>
+          <% totalsList.forEach(function(t) { %>
+            <tr>
+              <td><%= t.name %></td>
+              <td><%= t.unit %></td>
+              <td><%= t.quantity %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+  <h2>By Shop</h2>
+  <% shops.forEach(function(shop) { %>
+    <% var entry = ordersByShopId[shop.id]; %>
+    <div class="shop-block">
+      <h3>
+        <%= shop.name %>
+        <% if (entry) { %>
+          <span class="tag"><%= entry.order.status %></span>
+          <% if (entry.order.is_late) { %>
+            <span class="tag-late">Late order</span>
+          <% } %>
+        <% } else { %>
+          <span class="tag">no order</span>
+        <% } %>
+      </h3>
+
+      <% if (!entry) { %>
+        <p class="muted">No order submitted yet.</p>
+      <% } else { %>
+        <div class="card">
+          <table>
+            <tbody>
+              <% entry.items.forEach(function(oi) { %>
+                <tr>
+                  <td>
+                    <%= oi.name %><% if (oi.note) { %> — <em><%= oi.note %></em><% } %>
+                    <% if (oi.current_stock !== null) { %>
+                      <span class="muted">(stock on hand: <%= oi.current_stock %>)</span>
+                    <% } %>
+                  </td>
+                  <td><%= oi.quantity %> <%= oi.unit %></td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+          <div class="toolbar no-print" style="margin-top: 16px; margin-bottom: 0;">
+            <a class="btn btn-small" href="/kitchen/packing-slip/<%= shop.id %>?date=<%= deliveryDate %>" target="_blank">
+              Print Packing Slip
+            </a>
+            <form class="inline-form" method="POST" action="/kitchen/orders/<%= entry.order.id %>/status">
+              <input type="hidden" name="status" value="<%= entry.order.status === 'prepared' ? 'submitted' : 'prepared' %>" />
+              <button class="btn btn-small" type="submit">
+                <%= entry.order.status === 'prepared' ? 'Mark Not Prepared' : 'Mark Prepared' %>
+              </button>
+            </form>
+          </div>
+        </div>
+      <% } %>
+    </div>
+  <% }) %>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,36 @@
+<%- include('partials/head', { title: (typeof storeUser !== 'undefined' && storeUser ? storeUser.name : 'Log in') + ' — QTR Kitchen Ordering' }) %>
+
+<div class="container">
+  <form class="login-form" method="POST" action="/login">
+    <% if (typeof storeUser !== 'undefined' && storeUser) { %>
+      <p class="muted" style="margin-bottom: 8px;"><a href="/">&larr; All stores</a></p>
+      <h1><%= storeUser.name %></h1>
+      <p class="subtitle">Enter your store password.</p>
+      <input type="hidden" name="username" value="<%= storeUser.username %>" />
+    <% } else { %>
+      <h1>QTR Kitchen<br />Ordering</h1>
+      <p class="subtitle">Log in with your shop account.</p>
+    <% } %>
+
+    <% if (error) { %>
+      <p class="error"><%= error %></p>
+    <% } %>
+
+    <% if (typeof storeUser === 'undefined' || !storeUser) { %>
+      <div style="margin-bottom: 16px;">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" style="width: 100%;" required />
+      </div>
+    <% } %>
+
+    <div style="margin-bottom: 24px;">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" style="width: 100%;" required autofocus />
+    </div>
+
+    <button class="btn btn-filled" type="submit" style="width: 100%;">Log in</button>
+  </form>
+</div>
+
+</body>
+</html>

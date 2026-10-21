@@ -1,0 +1,41 @@
+<%- include('partials/head', { title: "Order History — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Order History</h1>
+  <p class="subtitle">Every delivery date that has orders, most recent first.</p>
+
+  <div class="card">
+    <% if (dates.length === 0) { %>
+      <p class="muted">No orders yet.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr>
+            <th>Delivery Date</th>
+            <th>Shops Ordered</th>
+            <th>Total Items</th>
+            <th>Prepared</th>
+            <th>Late</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% dates.forEach(function(d) { %>
+            <tr>
+              <td><%= formatDate(d.delivery_date) %></td>
+              <td><%= d.shop_count %> / <%= totalShops %></td>
+              <td><%= d.total_items %></td>
+              <td><%= d.prepared_count %> / <%= d.shop_count %></td>
+              <td><% if (d.late_count > 0) { %><span class="tag-late"><%= d.late_count %> late</span><% } else { %>—<% } %></td>
+              <td><a class="btn btn-small" href="/kitchen?date=<%= d.delivery_date %>">View</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

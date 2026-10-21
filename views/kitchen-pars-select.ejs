@@ -1,0 +1,16 @@
+<%- include('partials/head', { title: "Par Levels — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Par Levels</h1>
+  <p class="subtitle">Pick a store to set its par levels. Each store's pars are independent.</p>
+
+  <div class="store-grid">
+    <% shops.forEach(function(shop) { %>
+      <a class="store-tile" href="/kitchen/pars?shop=<%= shop.slug %>"><%= shop.name %></a>
+    <% }) %>
+  </div>
+</div>
+
+</body>
+</html>

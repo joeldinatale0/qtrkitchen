@@ -1,0 +1,34 @@
+<%- include('partials/head', { title: "Order Complete — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <div style="text-align: center; margin-bottom: 40px;">
+    <h1>Order submitted</h1>
+    <p class="subtitle">
+      Your order for <%= formatDate(deliveryDate) %> has been sent to the kitchen.
+    </p>
+    <% if (isLate) { %>
+      <span class="tag-late">Late order</span>
+    <% } %>
+  </div>
+
+  <div class="card">
+    <table>
+      <tbody>
+        <% orderItems.forEach(function(oi) { %>
+          <tr>
+            <td><%= oi.name %><% if (oi.note) { %> — <em><%= oi.note %></em><% } %></td>
+            <td style="text-align: right;"><%= oi.quantity %> <%= oi.unit %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="toolbar" style="justify-content: center; margin-top: 32px;">
+    <a class="btn btn-filled" href="/order">Edit this order</a>
+  </div>
+</div>
+
+</body>
+</html>

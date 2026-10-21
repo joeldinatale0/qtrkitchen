@@ -1,0 +1,32 @@
+<%- include('partials/head', { title: "Packing Slip — " + shop.name }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1><%= shop.name %></h1>
+  <p class="subtitle">Delivery: <%= formatDate(deliveryDate) %></p>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Qty</th><th>Unit</th></tr>
+      </thead>
+      <tbody>
+        <% if (items.length === 0) { %>
+          <tr><td colspan="3" class="muted">No order for this date.</td></tr>
+        <% } %>
+        <% items.forEach(function(oi) { %>
+          <tr>
+            <td><%= oi.name %><% if (oi.note) { %> — <em><%= oi.note %></em><% } %></td>
+            <td><%= oi.quantity %></td>
+            <td><%= oi.unit %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <button class="btn no-print" onclick="window.print()">Print</button>
+</div>
+
+</body>
+</html>

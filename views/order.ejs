@@ -1,0 +1,119 @@
+<%- include('partials/head', { title: "Place Order — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Order for <%= formatDate(deliveryDate) %></h1>
+  <p class="subtitle">
+    Enter quantities for what you need delivered tomorrow morning. Orders are due by
+    <%= cutoffHour %>:00 (2:00 PM) — the kitchen preps overnight. You can resubmit any time before then to update your order.
+  </p>
+
+  <% if (isLateNow) { %>
+    <div class="late-banner">It's after <%= cutoffHour %>:00 — submitting now will be flagged as a <strong>LATE ORDER</strong>.</div>
+  <% } %>
+
+  <% if (typeof submitted !== 'undefined' && submitted) { %>
+    <div class="success-banner">You already have an order saved for this date — submitting again will update it.</div>
+  <% } %>
+
+  <form method="POST" action="/order">
+    <% categories.forEach(function(cat) { %>
+      <h2><%= cat.name %></h2>
+      <div class="card">
+        <% cat.items.forEach(function(item) { %>
+          <% if (parByItemId[item.id] !== undefined) { %>
+            <div class="item-row par-row">
+              <div class="item-name">
+                <%= item.name %>
+                <span class="item-unit">/ <%= item.unit %></span>
+                <span class="muted">(par <%= parByItemId[item.id] %>)</span>
+              </div>
+              <div class="par-inputs">
+                <label>
+                  Stock
+                  <input
+                    type="number"
+                    class="par-stock"
+                    data-par="<%= parByItemId[item.id] %>"
+                    data-target="#order_<%= item.id %>"
+                    min="0"
+                    step="1"
+                    value="<%= existingStock[item.id] !== undefined ? existingStock[item.id] : '' %>"
+                    placeholder="0"
+                  />
+                </label>
+                <label>
+                  Suggested
+                  <input type="text" class="par-suggested" readonly value="" tabindex="-1" />
+                </label>
+                <label>
+                  Order
+                  <input
+                    type="number"
+                    id="order_<%= item.id %>"
+                    name="item_<%= item.id %>"
+                    min="0"
+                    step="1"
+                    value="<%= existingQuantities[item.id] || '' %>"
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+            </div>
+          <% } else { %>
+            <div class="item-row">
+              <div class="item-name">
+                <%= item.name %>
+                <span class="item-unit">/ <%= item.unit %></span>
+              </div>
+              <input
+                type="number"
+                name="item_<%= item.id %>"
+                min="0"
+                step="1"
+                value="<%= existingQuantities[item.id] || '' %>"
+                placeholder="0"
+              />
+            </div>
+          <% } %>
+        <% }) %>
+        <% if (cat.items.length === 0) { %>
+          <p class="muted">No items in this category yet.</p>
+        <% } %>
+      </div>
+    <% }) %>
+
+    <h2>Other (Custom Request)</h2>
+    <div class="card">
+      <label for="custom_notes">One request per line</label>
+      <textarea id="custom_notes" name="custom_notes" placeholder="e.g. 2x extra ice bags"><%= existingCustomNotes %></textarea>
+    </div>
+
+    <button class="btn btn-filled" type="submit">Submit Order</button>
+  </form>
+</div>
+
+<script>
+  document.querySelectorAll('.par-stock').forEach(function (stockInput) {
+    var par = parseInt(stockInput.dataset.par, 10);
+    var suggestedInput = stockInput.closest('.par-inputs').querySelector('.par-suggested');
+    var orderInput = document.querySelector(stockInput.dataset.target);
+
+    function update() {
+      var stock = parseInt(stockInput.value, 10);
+      if (isNaN(stock)) {
+        suggestedInput.value = '';
+        return;
+      }
+      var suggested = Math.max(par - stock, 0);
+      suggestedInput.value = suggested;
+      orderInput.value = suggested;
+    }
+
+    stockInput.addEventListener('input', update);
+    update();
+  });
+</script>
+
+</body>
+</html>

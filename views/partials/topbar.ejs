@@ -1,0 +1,19 @@
+<div class="topbar no-print">
+  <div class="brand">QTR Kitchen Ordering</div>
+  <nav>
+    <% if (currentUser) { %>
+      <span class="muted"><%= currentUser.name %></span>
+      <% if (currentUser.role === 'shop') { %>
+        <a href="/order">Order</a>
+      <% } else { %>
+        <a href="/kitchen">Dashboard</a>
+        <a href="/kitchen/history">History</a>
+        <a href="/kitchen/items">Manage Items</a>
+        <a href="/kitchen/pars">Par Levels</a>
+      <% } %>
+      <form class="inline-form" method="POST" action="/logout">
+        <button class="btn btn-small" type="submit">Log out</button>
+      </form>
+    <% } %>
+  </nav>
+</div>
