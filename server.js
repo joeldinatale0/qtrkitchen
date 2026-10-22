@@ -194,7 +194,7 @@ async function sendWeeklySummaryIfDue() {
   const today = melbourneDateString();
   const todayDow = new Date(today + "T00:00:00").getDay(); // 1 = Monday
   if (todayDow !== 1) return;
-  if (melbourneHour() < 3) return;
+  if (melbourneHour() < 5) return; // Monday 5:00 AM Melbourne time
 
   const { weekStart, weekEnd } = weekBounds(addDays(today, -1)); // the week that just ended (yesterday = Sunday)
 
