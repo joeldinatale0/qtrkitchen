@@ -615,7 +615,15 @@ app.get("/kitchen/history", requireAuth, requireRole("kitchen"), (req, res) => {
     .prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'shop'")
     .get().c;
 
-  res.render("kitchen-history", { dates, totalShops });
+  res.render("kitchen-history", { dates, totalShops, cleared: req.query.cleared === "1" });
+});
+
+app.post("/kitchen/history/clear", requireAuth, requireRole("kitchen"), (req, res) => {
+  // No ON DELETE CASCADE enforcement without PRAGMA foreign_keys=ON, so
+  // delete order_items explicitly before orders rather than relying on it.
+  db.prepare("DELETE FROM order_items").run();
+  db.prepare("DELETE FROM orders").run();
+  res.redirect("/kitchen/history?cleared=1");
 });
 
 app.get(
