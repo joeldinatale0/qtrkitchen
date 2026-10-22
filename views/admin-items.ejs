@@ -6,8 +6,9 @@
   <p class="subtitle">
     Add, rename, or retire items shops can order. Price is used only for the
     weekly invoice total — it never appears on the shop ordering screen.
-    Par levels (current-stock / suggested-order) are set per shop — see
-    <a href="/kitchen/pars">Par Levels</a>.
+    "Visible to" restricts an item to one store's menu only — leave as "All
+    shops" unless it's store-specific. Par levels (current-stock /
+    suggested-order) are set per shop — see <a href="/kitchen/pars">Par Levels</a>.
   </p>
 
   <% if (saved) { %>
@@ -23,6 +24,12 @@
             <input type="text" name="name" value="<%= item.name %>" class="admin-item-name" />
             <input type="text" name="unit" value="<%= item.unit %>" class="admin-item-unit" placeholder="unit" />
             <input type="number" step="0.01" min="0" name="price" value="<%= item.price !== null ? item.price : '' %>" class="admin-item-price" placeholder="price" />
+            <select name="shop_id" class="admin-item-shop">
+              <option value="">All shops</option>
+              <% shops.forEach(function(s) { %>
+                <option value="<%= s.id %>" <%= item.shop_id === s.id ? 'selected' : '' %>><%= s.name %></option>
+              <% }) %>
+            </select>
             <button class="btn btn-small" type="submit">Save</button>
           </form>
           <form class="inline-form" method="POST" action="/kitchen/items/<%= item.id %>/toggle">
@@ -41,8 +48,14 @@
       <form method="POST" action="/kitchen/items" class="toolbar" style="margin-top: 16px; margin-bottom: 0;">
         <input type="hidden" name="category_id" value="<%= cat.id %>" />
         <input type="text" name="name" placeholder="New item name" required style="flex: 1; min-width: 160px;" />
-        <input type="text" name="unit" placeholder="Unit (ea, pack, kg...)" style="width: 140px;" />
-        <input type="number" step="0.01" min="0" name="price" placeholder="Price (optional)" style="width: 140px;" />
+        <input type="text" name="unit" placeholder="Unit (ea, pack, kg...)" style="width: 130px;" />
+        <input type="number" step="0.01" min="0" name="price" placeholder="Price (optional)" style="width: 130px;" />
+        <select name="shop_id" style="width: 150px;">
+          <option value="">All shops</option>
+          <% shops.forEach(function(s) { %>
+            <option value="<%= s.id %>"><%= s.name %></option>
+          <% }) %>
+        </select>
         <button class="btn btn-small" type="submit">Add Item</button>
       </form>
     </div>

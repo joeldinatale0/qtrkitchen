@@ -90,6 +90,7 @@ ensureColumn("orders", "is_late", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("order_items", "current_stock", "INTEGER");
 ensureColumn("shop_item_pars", "par_level_weekend", "INTEGER");
 ensureColumn("items", "price", "REAL");
+ensureColumn("items", "shop_id", "INTEGER REFERENCES users(id)"); // NULL = visible to all shops; set = that shop only
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
@@ -135,7 +136,7 @@ function seedIfEmpty() {
     }
 
     const insertItem = db.prepare(
-      "INSERT INTO items (category_id, name, unit, sort_order, par_level, price) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO items (category_id, name, unit, sort_order, par_level, price, shop_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
     const starterItems = {
       food: [
@@ -159,6 +160,15 @@ function seedIfEmpty() {
         ["Chicken Cheese & Mushroom Boat", "ea"],
         ["Chicken Cheese & BBQ Sauce Boat", "ea"],
         ["Vegetarian Toastie", "ea", null, 4.0],
+        // Essendon-only ingredient components
+        ["Grilled Chicken Pieces", "ea", null, null, "essendon"],
+        ["Chicken Schnitzel Pieces", "ea", null, null, "essendon"],
+        ["Avocado", "ea", null, null, "essendon"],
+        ["Ham", "bundle", null, null, "essendon"],
+        ["Walnuts", "container", null, null, "essendon"],
+        ["Scroll Icing", "container", null, null, "essendon"],
+        ["Granola", "container", null, null, "essendon"],
+        ["Mushrooms", "container", null, null, "essendon"],
       ],
       cans: [
         ["Oats - Nutella", "ea"],
@@ -186,9 +196,11 @@ function seedIfEmpty() {
         ["Takeaway Bags", "pack"],
       ],
     };
+    const getShopForSeed = db.prepare("SELECT id FROM users WHERE slug = ? AND role = 'shop'");
     for (const [catSlug, items] of Object.entries(starterItems)) {
-      items.forEach(([name, unit, parLevel, price], i) => {
-        insertItem.run(catIds[catSlug], name, unit, i + 1, parLevel ?? null, price ?? null);
+      items.forEach(([name, unit, parLevel, price, shopOnlySlug], i) => {
+        const shopId = shopOnlySlug ? getShopForSeed.get(shopOnlySlug)?.id ?? null : null;
+        insertItem.run(catIds[catSlug], name, unit, i + 1, parLevel ?? null, price ?? null, shopId);
       });
     }
   }

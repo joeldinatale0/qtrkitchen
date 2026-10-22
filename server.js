@@ -419,8 +419,10 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
     .prepare("SELECT * FROM categories WHERE is_custom = 0 ORDER BY sort_order")
     .all();
   const items = db
-    .prepare("SELECT * FROM items WHERE active = 1 ORDER BY sort_order")
-    .all();
+    .prepare(
+      "SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?) ORDER BY sort_order"
+    )
+    .all(req.session.user.id);
 
   const existingOrder = db
     .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
@@ -475,7 +477,9 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   const shopId = req.session.user.id;
   const isLate = deliveryDate === tomorrow() && isLateSubmission();
 
-  const items = db.prepare("SELECT * FROM items WHERE active = 1").all();
+  const items = db
+    .prepare("SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?)")
+    .all(shopId);
   const parRows = db
     .prepare("SELECT item_id FROM shop_item_pars WHERE shop_id = ?")
     .all(shopId);
@@ -657,32 +661,43 @@ app.get("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
   categories.forEach((cat) => {
     cat.items = items.filter((i) => i.category_id === cat.id);
   });
-  res.render("admin-items", { categories, saved: req.query.saved === "1" });
+  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
+  res.render("admin-items", { categories, shops, saved: req.query.saved === "1" });
 });
 
 app.post("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { category_id, name, unit, price } = req.body;
+  const { category_id, name, unit, price, shop_id } = req.body;
   if (name && name.trim() && category_id) {
     const maxOrder = db
       .prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM items WHERE category_id = ?")
       .get(category_id).m;
     const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
+    const shopIdVal = shop_id && shop_id.trim() !== "" ? parseInt(shop_id, 10) : null;
     db.prepare(
-      "INSERT INTO items (category_id, name, unit, sort_order, price) VALUES (?, ?, ?, ?, ?)"
-    ).run(category_id, name.trim(), (unit || "ea").trim(), maxOrder + 1, isNaN(priceVal) ? null : priceVal);
+      "INSERT INTO items (category_id, name, unit, sort_order, price, shop_id) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(
+      category_id,
+      name.trim(),
+      (unit || "ea").trim(),
+      maxOrder + 1,
+      isNaN(priceVal) ? null : priceVal,
+      isNaN(shopIdVal) ? null : shopIdVal
+    );
   }
   res.redirect("/kitchen/items?saved=1");
 });
 
 app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { name, unit, price } = req.body;
+  const { name, unit, price, shop_id } = req.body;
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item && name && name.trim()) {
     const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
-    db.prepare("UPDATE items SET name = ?, unit = ?, price = ? WHERE id = ?").run(
+    const shopIdVal = shop_id && shop_id.trim() !== "" ? parseInt(shop_id, 10) : null;
+    db.prepare("UPDATE items SET name = ?, unit = ?, price = ?, shop_id = ? WHERE id = ?").run(
       name.trim(),
       (unit || "ea").trim(),
       isNaN(priceVal) ? null : priceVal,
+      isNaN(shopIdVal) ? null : shopIdVal,
       item.id
     );
   }
@@ -722,8 +737,10 @@ app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
     .prepare("SELECT * FROM categories WHERE is_custom = 0 ORDER BY sort_order")
     .all();
   const items = db
-    .prepare("SELECT * FROM items WHERE active = 1 ORDER BY sort_order")
-    .all();
+    .prepare(
+      "SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?) ORDER BY sort_order"
+    )
+    .all(shop.id);
   categories.forEach((cat) => {
     cat.items = items.filter((i) => i.category_id === cat.id);
   });
