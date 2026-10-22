@@ -168,8 +168,7 @@ function seedIfEmpty() {
         ["Mango Yoghurt", "ea"],
       ],
       juices: [
-        ["Orange Juice 250ml", "ea"],
-        ["Apple Juice 250ml", "ea"],
+        ["Watermelon Juice", "2L"],
       ],
       pastries: [
         ["Carrot Cake", "cake"],
