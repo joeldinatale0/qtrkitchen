@@ -1,13 +1,13 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const PDFDocument = require("pdfkit");
 const express = require("express");
 const session = require("express-session");
 const SqliteStore = require("better-sqlite3-session-store")(session);
 const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const db = require("./db");
+const { buildWeeklySummaryPdf } = require("./invoice-pdf");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -143,88 +143,6 @@ async function sendDailyBackupIfDue() {
   }
 }
 
-// Builds a one-page-per-nothing-fancy PDF: shop name, week range, and a
-// table of total quantity ordered per item across that week. No pricing —
-// there's no price data anywhere in this system — just an order summary.
-function money(n) {
-  return `$${n.toFixed(2)}`;
-}
-
-function buildWeeklySummaryPdf(shop, weekStartLabel, weekEndLabel, totalsList) {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50 });
-    const chunks = [];
-    doc.on("data", (chunk) => chunks.push(chunk));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
-
-    doc.fontSize(20).text("QTR Kitchen Ordering", { align: "left" });
-    doc.fontSize(14).text(`Weekly Invoice — ${shop.name}`);
-    doc.fontSize(11).fillColor("#555").text(`${weekStartLabel} to ${weekEndLabel}`);
-    doc.moveDown(1.5);
-    doc.fillColor("#000");
-
-    doc.fontSize(12);
-    const colItem = 50;
-    const colUnit = 270;
-    const colQty = 330;
-    const colPrice = 400;
-    const colSubtotal = 470;
-    const rightEdge = 545;
-    doc.font("Helvetica-Bold");
-    doc.text("Item", colItem, doc.y, { continued: false });
-    doc.text("Unit", colUnit, doc.y - doc.currentLineHeight(), { continued: false });
-    doc.text("Qty", colQty, doc.y - doc.currentLineHeight(), { continued: false });
-    doc.text("Price", colPrice, doc.y - doc.currentLineHeight(), { continued: false });
-    doc.text("Subtotal", colSubtotal, doc.y - doc.currentLineHeight());
-    doc.moveDown(0.3);
-    doc.moveTo(colItem, doc.y).lineTo(rightEdge, doc.y).strokeColor("#ccc").stroke();
-    doc.moveDown(0.5);
-    doc.font("Helvetica");
-
-    let grandTotal = 0;
-    let hasUnpriced = false;
-
-    if (totalsList.length === 0) {
-      doc.fillColor("#777").text("No orders were placed this week.");
-    } else {
-      totalsList.forEach((t) => {
-        const y = doc.y;
-        const subtotal = t.price !== null ? t.price * t.quantity : null;
-        if (subtotal !== null) grandTotal += subtotal;
-        else hasUnpriced = true;
-
-        doc.text(t.name, colItem, y, { width: 210 });
-        doc.text(t.unit, colUnit, y);
-        doc.text(String(t.quantity), colQty, y);
-        doc.text(t.price !== null ? money(t.price) : "—", colPrice, y);
-        doc.text(subtotal !== null ? money(subtotal) : "—", colSubtotal, y);
-        doc.moveDown(0.4);
-      });
-
-      doc.moveDown(0.3);
-      doc.moveTo(colItem, doc.y).lineTo(rightEdge, doc.y).strokeColor("#ccc").stroke();
-      doc.moveDown(0.5);
-      doc.font("Helvetica-Bold");
-      doc.text("Total", colPrice, doc.y);
-      doc.text(money(grandTotal), colSubtotal, doc.y - doc.currentLineHeight());
-      doc.font("Helvetica");
-
-      if (hasUnpriced) {
-        doc.moveDown(1);
-        doc.fontSize(10).fillColor("#777").text(
-          "Note: some items don't have a price set yet and are excluded from the total above (shown as —).",
-          colItem,
-          doc.y,
-          { width: rightEdge - colItem }
-        );
-      }
-    }
-
-    doc.end();
-  });
-}
-
 async function sendWeeklySummaryIfDue() {
   if (!process.env.RESEND_API_KEY) return;
   const today = melbourneDateString();
@@ -243,23 +161,45 @@ async function sendWeeklySummaryIfDue() {
     if (already) continue;
 
     try {
-      const rows = db
+      const dailyRows = db
         .prepare(
-          `SELECT oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
+          `SELECT o.delivery_date, oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
            LEFT JOIN items i ON i.id = oi.item_id
            WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
-           GROUP BY oi.name, oi.unit
-           ORDER BY oi.name`
+           GROUP BY o.delivery_date, oi.name, oi.unit
+           ORDER BY o.delivery_date, oi.name`
         )
         .all(shop.id, weekStart, weekEnd);
+
+      const dailyBreakdown = [];
+      for (let i = 0; i < 7; i++) {
+        const date = addDays(weekStart, i);
+        dailyBreakdown.push({
+          dateLabel: formatDate(date),
+          items: dailyRows
+            .filter((r) => r.delivery_date === date)
+            .map((r) => ({ name: r.name, unit: r.unit, quantity: r.quantity, price: r.price })),
+        });
+      }
+
+      const weeklyTotalsMap = {};
+      for (const r of dailyRows) {
+        const key = `${r.name}|${r.unit}`;
+        if (!weeklyTotalsMap[key]) {
+          weeklyTotalsMap[key] = { name: r.name, unit: r.unit, quantity: 0, price: r.price };
+        }
+        weeklyTotalsMap[key].quantity += r.quantity;
+      }
+      const weeklyTotals = Object.values(weeklyTotalsMap).sort((a, b) => a.name.localeCompare(b.name));
 
       const pdfBuffer = await buildWeeklySummaryPdf(
         shop,
         formatDate(weekStart),
         formatDate(weekEnd),
-        rows
+        dailyBreakdown,
+        weeklyTotals
       );
 
       const res = await fetch("https://api.resend.com/emails", {
