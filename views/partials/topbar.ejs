@@ -4,7 +4,7 @@
     <% if (currentUser) { %>
       <span class="muted"><%= currentUser.name %></span>
       <% if (currentUser.role === 'shop') { %>
-        <a href="/order">Order</a>
+        <a href="/order/select-date">Order</a>
       <% } else { %>
         <a href="/kitchen">Dashboard</a>
         <a href="/kitchen/history">History</a>

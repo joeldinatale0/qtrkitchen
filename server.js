@@ -1,6 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const PDFDocument = require("pdfkit");
 const express = require("express");
 const session = require("express-session");
 const SqliteStore = require("better-sqlite3-session-store")(session);
@@ -142,8 +143,123 @@ async function sendDailyBackupIfDue() {
   }
 }
 
+// Builds a one-page-per-nothing-fancy PDF: shop name, week range, and a
+// table of total quantity ordered per item across that week. No pricing —
+// there's no price data anywhere in this system — just an order summary.
+function buildWeeklySummaryPdf(shop, weekStartLabel, weekEndLabel, totalsList) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50 });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    doc.fontSize(20).text("QTR Kitchen Ordering", { align: "left" });
+    doc.fontSize(14).text(`Weekly Order Summary — ${shop.name}`);
+    doc.fontSize(11).fillColor("#555").text(`${weekStartLabel} to ${weekEndLabel}`);
+    doc.moveDown(1.5);
+    doc.fillColor("#000");
+
+    doc.fontSize(12);
+    const colItem = 50;
+    const colUnit = 350;
+    const colQty = 450;
+    doc.font("Helvetica-Bold");
+    doc.text("Item", colItem, doc.y, { continued: false });
+    doc.text("Unit", colUnit, doc.y - doc.currentLineHeight(), { continued: false });
+    doc.text("Total Qty", colQty, doc.y - doc.currentLineHeight());
+    doc.moveDown(0.3);
+    doc.moveTo(colItem, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
+    doc.moveDown(0.5);
+    doc.font("Helvetica");
+
+    if (totalsList.length === 0) {
+      doc.fillColor("#777").text("No orders were placed this week.");
+    } else {
+      totalsList.forEach((t) => {
+        const y = doc.y;
+        doc.text(t.name, colItem, y, { width: 290 });
+        doc.text(t.unit, colUnit, y);
+        doc.text(String(t.quantity), colQty, y);
+        doc.moveDown(0.4);
+      });
+    }
+
+    doc.end();
+  });
+}
+
+async function sendWeeklySummaryIfDue() {
+  if (!process.env.RESEND_API_KEY) return;
+  const today = melbourneDateString();
+  const todayDow = new Date(today + "T00:00:00").getDay(); // 1 = Monday
+  if (todayDow !== 1) return;
+  if (melbourneHour() < 3) return;
+
+  const { weekStart, weekEnd } = weekBounds(addDays(today, -1)); // the week that just ended (yesterday = Sunday)
+
+  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop'").all();
+
+  for (const shop of shops) {
+    const already = db
+      .prepare("SELECT 1 FROM invoice_log WHERE week_start_date = ? AND shop_id = ?")
+      .get(weekStart, shop.id);
+    if (already) continue;
+
+    try {
+      const rows = db
+        .prepare(
+          `SELECT oi.name, oi.unit, SUM(oi.quantity) AS quantity
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
+           GROUP BY oi.name, oi.unit
+           ORDER BY oi.name`
+        )
+        .all(shop.id, weekStart, weekEnd);
+
+      const pdfBuffer = await buildWeeklySummaryPdf(
+        shop,
+        formatDate(weekStart),
+        formatDate(weekEnd),
+        rows
+      );
+
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+          to: EMAIL_TO,
+          subject: `Weekly Order Summary — ${shop.name} — ${weekStart} to ${weekEnd}`,
+          text: `Attached: total quantity of each item ordered by ${shop.name} for the week of ${weekStart} to ${weekEnd}.`,
+          attachments: [
+            {
+              filename: `weekly-summary-${shop.slug}-${weekStart}.pdf`,
+              content: pdfBuffer.toString("base64"),
+            },
+          ],
+        }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+      db.prepare(
+        "INSERT INTO invoice_log (week_start_date, shop_id) VALUES (?, ?)"
+      ).run(weekStart, shop.id);
+      console.log(`Weekly summary emailed for ${shop.name}, week of ${weekStart}`);
+    } catch (err) {
+      console.error(`Weekly summary failed for ${shop.name}:`, err.message);
+    }
+  }
+}
+
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
+setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 sendDailyBackupIfDue();
+sendWeeklySummaryIfDue();
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
@@ -177,10 +293,45 @@ const loginLimiter = rateLimit({
   keyGenerator: (req) => (req.body.username || "unknown").trim().toLowerCase(),
 });
 
+// Pure calendar-date arithmetic, anchored in UTC on both ends so the result
+// never shifts by a day depending on what timezone the server's system
+// clock happens to be set to (this bit us: .toISOString() after local-time
+// Date construction silently loses a day whenever local time != UTC).
+function addDays(isoDate, days) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 function tomorrow() {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return addDays(melbourneDateString(), 1);
+}
+
+function isWeekendDate(isoDate) {
+  const day = new Date(isoDate + "T00:00:00").getDay(); // 0 = Sunday, 6 = Saturday
+  return day === 0 || day === 6;
+}
+
+// Mon-Sun week containing isoDate; returns { weekStart, weekEnd } as ISO date strings.
+function weekBounds(isoDate) {
+  const day = new Date(isoDate + "T00:00:00").getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day; // distance back to Monday
+  const weekStart = addDays(isoDate, mondayOffset);
+  const weekEnd = addDays(weekStart, 6);
+  return { weekStart, weekEnd };
+}
+
+function effectivePar(parRow, isoDate) {
+  if (isWeekendDate(isoDate) && parRow.par_level_weekend !== null) {
+    return parRow.par_level_weekend;
+  }
+  return parRow.par_level;
+}
+
+function isValidFutureDate(isoDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate || "")) return false;
+  return isoDate >= tomorrow();
 }
 
 function formatDate(isoDate) {
@@ -217,7 +368,7 @@ app.use((req, res, next) => {
 
 app.get("/", (req, res) => {
   if (req.session.user) {
-    return res.redirect(req.session.user.role === "kitchen" ? "/kitchen" : "/order");
+    return res.redirect(req.session.user.role === "kitchen" ? "/kitchen" : "/order/select-date");
   }
   const shops = db
     .prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name")
@@ -266,10 +417,27 @@ app.post("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/"));
 });
 
-// ---------- Shop: place order ----------
+// ---------- Shop: pick a delivery date, then place order ----------
+
+app.get("/order/select-date", requireAuth, requireRole("shop"), (req, res) => {
+  const upcoming = db
+    .prepare(
+      `SELECT delivery_date, is_late, status FROM orders
+       WHERE shop_id = ? AND delivery_date >= ?
+       ORDER BY delivery_date ASC`
+    )
+    .all(req.session.user.id, tomorrow());
+
+  res.render("order-select-date", {
+    minDate: tomorrow(),
+    upcoming,
+  });
+});
 
 app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
-  const deliveryDate = tomorrow();
+  const deliveryDate = req.query.date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
+
   const categories = db
     .prepare("SELECT * FROM categories WHERE is_custom = 0 ORDER BY sort_order")
     .all();
@@ -282,10 +450,10 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
     .get(req.session.user.id, deliveryDate);
 
   const parRows = db
-    .prepare("SELECT item_id, par_level FROM shop_item_pars WHERE shop_id = ?")
+    .prepare("SELECT item_id, par_level, par_level_weekend FROM shop_item_pars WHERE shop_id = ?")
     .all(req.session.user.id);
   const parByItemId = {};
-  parRows.forEach((p) => (parByItemId[p.item_id] = p.par_level));
+  parRows.forEach((p) => (parByItemId[p.item_id] = effectivePar(p, deliveryDate)));
 
   const existingQuantities = {};
   const existingStock = {};
@@ -308,6 +476,8 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
     cat.items = items.filter((i) => i.category_id === cat.id);
   });
 
+  const isLateNow = deliveryDate === tomorrow() && isLateSubmission();
+
   res.render("order", {
     deliveryDate,
     categories,
@@ -316,15 +486,17 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
     existingStock,
     existingCustomNotes: existingCustomNotes.join("\n"),
     submitted: !!existingOrder,
-    isLateNow: isLateSubmission(),
+    isLateNow,
     cutoffHour: ORDER_CUTOFF_HOUR,
   });
 });
 
 app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
-  const deliveryDate = tomorrow();
+  const deliveryDate = req.body.delivery_date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
+
   const shopId = req.session.user.id;
-  const isLate = isLateSubmission();
+  const isLate = deliveryDate === tomorrow() && isLateSubmission();
 
   const items = db.prepare("SELECT * FROM items WHERE active = 1").all();
   const parRows = db
@@ -380,16 +552,18 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
 
   sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, customNotes, isLate);
 
-  res.redirect("/order/complete");
+  res.redirect(`/order/complete?date=${deliveryDate}`);
 });
 
 app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
-  const deliveryDate = tomorrow();
+  const deliveryDate = req.query.date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate || "")) return res.redirect("/order/select-date");
+
   const order = db
     .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
     .get(req.session.user.id, deliveryDate);
 
-  if (!order) return res.redirect("/order");
+  if (!order) return res.redirect("/order/select-date");
 
   const orderItems = db
     .prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id")
@@ -575,10 +749,10 @@ app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
   });
 
   const parRows = db
-    .prepare("SELECT item_id, par_level FROM shop_item_pars WHERE shop_id = ?")
+    .prepare("SELECT item_id, par_level, par_level_weekend FROM shop_item_pars WHERE shop_id = ?")
     .all(shop.id);
   const parByItemId = {};
-  parRows.forEach((p) => (parByItemId[p.item_id] = p.par_level));
+  parRows.forEach((p) => (parByItemId[p.item_id] = p));
 
   res.render("kitchen-pars", {
     shop,
@@ -596,8 +770,8 @@ app.post("/kitchen/pars/:shopSlug", requireAuth, requireRole("kitchen"), (req, r
 
   const items = db.prepare("SELECT id FROM items").all();
   const upsert = db.prepare(
-    `INSERT INTO shop_item_pars (shop_id, item_id, par_level) VALUES (?, ?, ?)
-     ON CONFLICT(shop_id, item_id) DO UPDATE SET par_level = excluded.par_level`
+    `INSERT INTO shop_item_pars (shop_id, item_id, par_level, par_level_weekend) VALUES (?, ?, ?, ?)
+     ON CONFLICT(shop_id, item_id) DO UPDATE SET par_level = excluded.par_level, par_level_weekend = excluded.par_level_weekend`
   );
   const clear = db.prepare(
     "DELETE FROM shop_item_pars WHERE shop_id = ? AND item_id = ?"
@@ -605,10 +779,13 @@ app.post("/kitchen/pars/:shopSlug", requireAuth, requireRole("kitchen"), (req, r
 
   for (const item of items) {
     const raw = req.body[`par_${item.id}`];
+    const rawWeekend = req.body[`par_weekend_${item.id}`];
     if (raw !== undefined && raw.trim() !== "") {
       const par = parseInt(raw, 10);
+      const parWeekend =
+        rawWeekend !== undefined && rawWeekend.trim() !== "" ? parseInt(rawWeekend, 10) : null;
       if (!isNaN(par) && par > 0) {
-        upsert.run(shop.id, item.id, par);
+        upsert.run(shop.id, item.id, par, isNaN(parWeekend) ? null : parWeekend);
         continue;
       }
     }

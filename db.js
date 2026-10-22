@@ -68,6 +68,13 @@ db.exec(`
     backup_date TEXT PRIMARY KEY,
     sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS invoice_log (
+    week_start_date TEXT NOT NULL,
+    shop_id INTEGER NOT NULL REFERENCES users(id),
+    sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(week_start_date, shop_id)
+  );
 `);
 
 // Idempotent migrations for columns added after initial release — safe to
@@ -81,6 +88,7 @@ function ensureColumn(table, column, definition) {
 ensureColumn("items", "par_level", "INTEGER");
 ensureColumn("orders", "is_late", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("order_items", "current_stock", "INTEGER");
+ensureColumn("shop_item_pars", "par_level_weekend", "INTEGER");
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
@@ -185,7 +193,88 @@ function seedIfEmpty() {
   }
 }
 
+// Per-shop par levels — the actual configured values for each store, not
+// placeholders. Previously only ever applied via one-off migration scripts
+// run against the live database; baked in here so a fresh database (e.g. a
+// new hosting provider) comes up fully configured with no manual steps.
+function seedParsIfEmpty() {
+  const parCount = db.prepare("SELECT COUNT(*) AS c FROM shop_item_pars").get().c;
+  if (parCount > 0) return;
+
+  const getItem = db.prepare("SELECT id FROM items WHERE name = ?");
+  const getShop = db.prepare("SELECT id FROM users WHERE slug = ? AND role = 'shop'");
+  const upsert = db.prepare(
+    `INSERT INTO shop_item_pars (shop_id, item_id, par_level, par_level_weekend) VALUES (?, ?, ?, ?)
+     ON CONFLICT(shop_id, item_id) DO UPDATE SET par_level = excluded.par_level, par_level_weekend = excluded.par_level_weekend`
+  );
+
+  // Highpoint: single shop, weekday-only pars (no weekend variation given).
+  const highpointPars = {
+    "Egg & Bacon Muffin": 14,
+    "Egg & Bacon Wrap": 14,
+    "Egg & Spinach Wrap": 7,
+    "Ham Cheese Croissant": 12,
+    "Ham Cheese Toastie": 14,
+    "Cheese Toastie": 6,
+    Spanakopita: 1,
+    "Halloumi Pie": 6,
+    "Lamb Ragu Toastie": 6,
+    "Nonnas Meatball Toastie": 6,
+    "Chicken Schnitz Toastie": 6,
+    "Chicken Caesar Wrap": 7,
+    "Sweet Chilli Chicken Wrap": 10,
+    "Grilled Chicken & Avo Toastie": 12,
+    "Mushroom & Cheese Toastie": 4,
+    "Chicken Cheese & Mushroom Boat": 6,
+    "Chicken Cheese & BBQ Sauce Boat": 6,
+    "Vegetarian Toastie": 5,
+    "Carrot Cake": 2,
+    "Banana Bread Loaf": 2,
+    "M&M Cookie": 15,
+    "Choc Chip Cookie": 15,
+    "Oats - Nutella": 15,
+    "Oats - Vanilla": 15,
+    "Oats - Biscoff": 15,
+    "Berry Chia": 15,
+    "Mango Chia": 15,
+    "Berry Yoghurt": 15,
+    "Mango Yoghurt": 15,
+  };
+  const highpoint = getShop.get("highpoint");
+  if (highpoint) {
+    for (const [name, par] of Object.entries(highpointPars)) {
+      const item = getItem.get(name);
+      if (item) upsert.run(highpoint.id, item.id, par, null);
+    }
+  }
+
+  // Essendon, Moonee Ponds, Melbourne Central: same pars, with weekday/weekend split.
+  const threeShopPars = [
+    ["Egg & Bacon Muffin", 22, 30],
+    ["Grilled Chicken & Avo Toastie", 14, 18],
+    ["Ham Cheese Croissant", 14, 18],
+    ["Ham Cheese Toastie", 16, 20],
+    ["Mushroom & Cheese Toastie", 6, null],
+    ["Halloumi Pie", 6, null],
+    ["Sweet Chilli Chicken Wrap", 10, null],
+    ["Spanakopita", 1, null],
+    ["Choc Chip Cookie", 10, 15],
+    ["M&M Cookie", 10, 15],
+    ["Banana Bread Loaf", 2, null],
+    ["Carrot Cake", 1, null],
+  ];
+  for (const slug of ["essendon", "mooneeponds", "melbournecentral"]) {
+    const shop = getShop.get(slug);
+    if (!shop) continue;
+    for (const [name, weekday, weekend] of threeShopPars) {
+      const item = getItem.get(name);
+      if (item) upsert.run(shop.id, item.id, weekday, weekend);
+    }
+  }
+}
+
 seedIfEmpty();
+seedParsIfEmpty();
 
 module.exports = db;
 module.exports.dbPath = dbPath;

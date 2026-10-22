@@ -1,0 +1,39 @@
+<%- include('partials/head', { title: "Select Delivery Date — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>When do you need this order delivered?</h1>
+  <p class="subtitle">Pick any upcoming morning — not just tomorrow.</p>
+
+  <form method="GET" action="/order" class="card" style="max-width: 420px;">
+    <label for="date">Delivery date</label>
+    <input type="date" id="date" name="date" min="<%= minDate %>" value="<%= minDate %>" required style="width: 100%; margin-bottom: 20px;" />
+    <button class="btn btn-filled" type="submit" style="width: 100%;">Continue to order</button>
+  </form>
+
+  <% if (upcoming.length > 0) { %>
+    <h2>Your upcoming orders</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Delivery Date</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% upcoming.forEach(function(o) { %>
+            <tr>
+              <td>
+                <%= formatDate(o.delivery_date) %>
+                <% if (o.is_late) { %><span class="tag-late">Late order</span><% } %>
+              </td>
+              <td><%= o.status %></td>
+              <td><a class="btn btn-small" href="/order?date=<%= o.delivery_date %>">Edit</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</div>
+
+</body>
+</html>

@@ -5,8 +5,10 @@
   <p class="muted"><a href="/kitchen/pars">&larr; All stores</a></p>
   <h1>Par Levels — <%= shop.name %></h1>
   <p class="subtitle">
-    Set a par level for any item this store wants stock-based suggestions for. Leave blank for
-    items this store just orders a plain quantity of — those won't show stock fields.
+    Set a weekday par level for any item this store wants stock-based suggestions for. Leave
+    blank for items this store just orders a plain quantity of — those won't show stock fields.
+    The weekend field is optional — leave it blank to use the same par every day, or set it for
+    items that need a different par on Saturday/Sunday deliveries.
   </p>
 
   <% if (saved) { %>
@@ -18,19 +20,36 @@
       <h2><%= cat.name %></h2>
       <div class="card">
         <% cat.items.forEach(function(item) { %>
-          <div class="item-row">
+          <% var p = parByItemId[item.id]; %>
+          <div class="item-row par-row">
             <div class="item-name">
               <%= item.name %>
               <span class="item-unit">/ <%= item.unit %></span>
             </div>
-            <input
-              type="number"
-              name="par_<%= item.id %>"
-              min="1"
-              step="1"
-              value="<%= parByItemId[item.id] !== undefined ? parByItemId[item.id] : '' %>"
-              placeholder="no par"
-            />
+            <div class="par-inputs">
+              <label>
+                Mon&ndash;Fri
+                <input
+                  type="number"
+                  name="par_<%= item.id %>"
+                  min="1"
+                  step="1"
+                  value="<%= p ? p.par_level : '' %>"
+                  placeholder="no par"
+                />
+              </label>
+              <label>
+                Weekend
+                <input
+                  type="number"
+                  name="par_weekend_<%= item.id %>"
+                  min="1"
+                  step="1"
+                  value="<%= p && p.par_level_weekend !== null ? p.par_level_weekend : '' %>"
+                  placeholder="same"
+                />
+              </label>
+            </div>
           </div>
         <% }) %>
         <% if (cat.items.length === 0) { %>
