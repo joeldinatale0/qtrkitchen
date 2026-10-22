@@ -89,6 +89,7 @@ ensureColumn("items", "par_level", "INTEGER");
 ensureColumn("orders", "is_late", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("order_items", "current_stock", "INTEGER");
 ensureColumn("shop_item_pars", "par_level_weekend", "INTEGER");
+ensureColumn("items", "price", "REAL");
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
@@ -134,29 +135,30 @@ function seedIfEmpty() {
     }
 
     const insertItem = db.prepare(
-      "INSERT INTO items (category_id, name, unit, sort_order, par_level) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO items (category_id, name, unit, sort_order, par_level, price) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const starterItems = {
       food: [
-        ["Egg & Bacon Muffin", "ea", 20],
-        ["Egg & Bacon Wrap", "ea"],
-        ["Egg & Spinach Wrap", "ea"],
-        ["Ham Cheese Croissant", "ea"],
-        ["Ham Cheese Toastie", "ea"],
-        ["Cheese Toastie", "ea"],
+        ["Egg & Bacon Muffin", "ea", 20, 4.0],
+        ["Egg & Bacon Wrap", "ea", null, 4.5],
+        ["Egg & Bacon Toastie", "ea", null, 4.5],
+        ["Egg & Spinach Wrap", "ea", null, 4.5],
+        ["Ham Cheese Croissant", "ea", null, 4.0],
+        ["Ham Cheese Toastie", "ea", null, 4.0],
+        ["Cheese Toastie", "ea", null, 3.5],
         ["Cheese & Tomato Toastie", "ea"],
         ["Spanakopita", "tray"],
         ["Halloumi Pie", "ea"],
-        ["Lamb Ragu Toastie", "ea"],
-        ["Nonnas Meatball Toastie", "ea"],
-        ["Chicken Schnitz Toastie", "ea"],
-        ["Chicken Caesar Wrap", "ea"],
-        ["Sweet Chilli Chicken Wrap", "ea"],
-        ["Grilled Chicken & Avo Toastie", "ea"],
-        ["Mushroom & Cheese Toastie", "ea"],
+        ["Lamb Ragu Toastie", "ea", null, 7.0],
+        ["Nonnas Meatball Toastie", "ea", null, 6.0],
+        ["Chicken Schnitz Toastie", "ea", null, 5.0],
+        ["Chicken Caesar Wrap", "ea", null, 4.0],
+        ["Sweet Chilli Chicken Wrap", "ea", null, 4.9],
+        ["Grilled Chicken & Avo Toastie", "ea", null, 5.0],
+        ["Mushroom & Cheese Toastie", "ea", null, 4.0],
         ["Chicken Cheese & Mushroom Boat", "ea"],
         ["Chicken Cheese & BBQ Sauce Boat", "ea"],
-        ["Vegetarian Toastie", "ea"],
+        ["Vegetarian Toastie", "ea", null, 4.0],
       ],
       cans: [
         ["Oats - Nutella", "ea"],
@@ -185,8 +187,8 @@ function seedIfEmpty() {
       ],
     };
     for (const [catSlug, items] of Object.entries(starterItems)) {
-      items.forEach(([name, unit, parLevel], i) => {
-        insertItem.run(catIds[catSlug], name, unit, i + 1, parLevel ?? null);
+      items.forEach(([name, unit, parLevel, price], i) => {
+        insertItem.run(catIds[catSlug], name, unit, i + 1, parLevel ?? null, price ?? null);
       });
     }
   }
@@ -211,6 +213,7 @@ function seedParsIfEmpty() {
   const highpointPars = {
     "Egg & Bacon Muffin": 14,
     "Egg & Bacon Wrap": 14,
+    "Egg & Bacon Toastie": 6,
     "Egg & Spinach Wrap": 7,
     "Ham Cheese Croissant": 12,
     "Ham Cheese Toastie": 14,
@@ -250,6 +253,7 @@ function seedParsIfEmpty() {
   // Essendon, Moonee Ponds, Melbourne Central: same pars, with weekday/weekend split.
   const threeShopPars = [
     ["Egg & Bacon Muffin", 22, 30],
+    ["Egg & Bacon Toastie", 6, null],
     ["Grilled Chicken & Avo Toastie", 14, 18],
     ["Ham Cheese Croissant", 14, 18],
     ["Ham Cheese Toastie", 16, 20],

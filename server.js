@@ -146,6 +146,10 @@ async function sendDailyBackupIfDue() {
 // Builds a one-page-per-nothing-fancy PDF: shop name, week range, and a
 // table of total quantity ordered per item across that week. No pricing —
 // there's no price data anywhere in this system — just an order summary.
+function money(n) {
+  return `$${n.toFixed(2)}`;
+}
+
 function buildWeeklySummaryPdf(shop, weekStartLabel, weekEndLabel, totalsList) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
@@ -155,34 +159,66 @@ function buildWeeklySummaryPdf(shop, weekStartLabel, weekEndLabel, totalsList) {
     doc.on("error", reject);
 
     doc.fontSize(20).text("QTR Kitchen Ordering", { align: "left" });
-    doc.fontSize(14).text(`Weekly Order Summary — ${shop.name}`);
+    doc.fontSize(14).text(`Weekly Invoice — ${shop.name}`);
     doc.fontSize(11).fillColor("#555").text(`${weekStartLabel} to ${weekEndLabel}`);
     doc.moveDown(1.5);
     doc.fillColor("#000");
 
     doc.fontSize(12);
     const colItem = 50;
-    const colUnit = 350;
-    const colQty = 450;
+    const colUnit = 270;
+    const colQty = 330;
+    const colPrice = 400;
+    const colSubtotal = 470;
+    const rightEdge = 545;
     doc.font("Helvetica-Bold");
     doc.text("Item", colItem, doc.y, { continued: false });
     doc.text("Unit", colUnit, doc.y - doc.currentLineHeight(), { continued: false });
-    doc.text("Total Qty", colQty, doc.y - doc.currentLineHeight());
+    doc.text("Qty", colQty, doc.y - doc.currentLineHeight(), { continued: false });
+    doc.text("Price", colPrice, doc.y - doc.currentLineHeight(), { continued: false });
+    doc.text("Subtotal", colSubtotal, doc.y - doc.currentLineHeight());
     doc.moveDown(0.3);
-    doc.moveTo(colItem, doc.y).lineTo(545, doc.y).strokeColor("#ccc").stroke();
+    doc.moveTo(colItem, doc.y).lineTo(rightEdge, doc.y).strokeColor("#ccc").stroke();
     doc.moveDown(0.5);
     doc.font("Helvetica");
+
+    let grandTotal = 0;
+    let hasUnpriced = false;
 
     if (totalsList.length === 0) {
       doc.fillColor("#777").text("No orders were placed this week.");
     } else {
       totalsList.forEach((t) => {
         const y = doc.y;
-        doc.text(t.name, colItem, y, { width: 290 });
+        const subtotal = t.price !== null ? t.price * t.quantity : null;
+        if (subtotal !== null) grandTotal += subtotal;
+        else hasUnpriced = true;
+
+        doc.text(t.name, colItem, y, { width: 210 });
         doc.text(t.unit, colUnit, y);
         doc.text(String(t.quantity), colQty, y);
+        doc.text(t.price !== null ? money(t.price) : "—", colPrice, y);
+        doc.text(subtotal !== null ? money(subtotal) : "—", colSubtotal, y);
         doc.moveDown(0.4);
       });
+
+      doc.moveDown(0.3);
+      doc.moveTo(colItem, doc.y).lineTo(rightEdge, doc.y).strokeColor("#ccc").stroke();
+      doc.moveDown(0.5);
+      doc.font("Helvetica-Bold");
+      doc.text("Total", colPrice, doc.y);
+      doc.text(money(grandTotal), colSubtotal, doc.y - doc.currentLineHeight());
+      doc.font("Helvetica");
+
+      if (hasUnpriced) {
+        doc.moveDown(1);
+        doc.fontSize(10).fillColor("#777").text(
+          "Note: some items don't have a price set yet and are excluded from the total above (shown as —).",
+          colItem,
+          doc.y,
+          { width: rightEdge - colItem }
+        );
+      }
     }
 
     doc.end();
@@ -209,9 +245,10 @@ async function sendWeeklySummaryIfDue() {
     try {
       const rows = db
         .prepare(
-          `SELECT oi.name, oi.unit, SUM(oi.quantity) AS quantity
+          `SELECT oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
+           LEFT JOIN items i ON i.id = oi.item_id
            WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
            GROUP BY oi.name, oi.unit
            ORDER BY oi.name`
@@ -234,11 +271,11 @@ async function sendWeeklySummaryIfDue() {
         body: JSON.stringify({
           from: "QTR Kitchen Ordering <onboarding@resend.dev>",
           to: EMAIL_TO,
-          subject: `Weekly Order Summary — ${shop.name} — ${weekStart} to ${weekEnd}`,
-          text: `Attached: total quantity of each item ordered by ${shop.name} for the week of ${weekStart} to ${weekEnd}.`,
+          subject: `Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
+          text: `Attached: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
           attachments: [
             {
-              filename: `weekly-summary-${shop.slug}-${weekStart}.pdf`,
+              filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`,
               content: pdfBuffer.toString("base64"),
             },
           ],
@@ -684,25 +721,28 @@ app.get("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
 });
 
 app.post("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { category_id, name, unit } = req.body;
+  const { category_id, name, unit, price } = req.body;
   if (name && name.trim() && category_id) {
     const maxOrder = db
       .prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM items WHERE category_id = ?")
       .get(category_id).m;
+    const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
     db.prepare(
-      "INSERT INTO items (category_id, name, unit, sort_order) VALUES (?, ?, ?, ?)"
-    ).run(category_id, name.trim(), (unit || "ea").trim(), maxOrder + 1);
+      "INSERT INTO items (category_id, name, unit, sort_order, price) VALUES (?, ?, ?, ?, ?)"
+    ).run(category_id, name.trim(), (unit || "ea").trim(), maxOrder + 1, isNaN(priceVal) ? null : priceVal);
   }
   res.redirect("/kitchen/items?saved=1");
 });
 
 app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { name, unit } = req.body;
+  const { name, unit, price } = req.body;
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item && name && name.trim()) {
-    db.prepare("UPDATE items SET name = ?, unit = ? WHERE id = ?").run(
+    const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
+    db.prepare("UPDATE items SET name = ?, unit = ?, price = ? WHERE id = ?").run(
       name.trim(),
       (unit || "ea").trim(),
+      isNaN(priceVal) ? null : priceVal,
       item.id
     );
   }

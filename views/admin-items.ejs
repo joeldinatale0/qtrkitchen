@@ -4,7 +4,8 @@
 <div class="container">
   <h1>Manage Item Catalog</h1>
   <p class="subtitle">
-    Add, rename, or retire items shops can order.
+    Add, rename, or retire items shops can order. Price is used only for the
+    weekly invoice total — it never appears on the shop ordering screen.
     Par levels (current-stock / suggested-order) are set per shop — see
     <a href="/kitchen/pars">Par Levels</a>.
   </p>
@@ -21,6 +22,7 @@
           <form method="POST" action="/kitchen/items/<%= item.id %>/update" class="admin-item-form">
             <input type="text" name="name" value="<%= item.name %>" class="admin-item-name" />
             <input type="text" name="unit" value="<%= item.unit %>" class="admin-item-unit" placeholder="unit" />
+            <input type="number" step="0.01" min="0" name="price" value="<%= item.price !== null ? item.price : '' %>" class="admin-item-price" placeholder="price" />
             <button class="btn btn-small" type="submit">Save</button>
           </form>
           <form class="inline-form" method="POST" action="/kitchen/items/<%= item.id %>/toggle">
@@ -39,7 +41,8 @@
       <form method="POST" action="/kitchen/items" class="toolbar" style="margin-top: 16px; margin-bottom: 0;">
         <input type="hidden" name="category_id" value="<%= cat.id %>" />
         <input type="text" name="name" placeholder="New item name" required style="flex: 1; min-width: 160px;" />
-        <input type="text" name="unit" placeholder="Unit (ea, pack, kg...)" style="width: 150px;" />
+        <input type="text" name="unit" placeholder="Unit (ea, pack, kg...)" style="width: 140px;" />
+        <input type="number" step="0.01" min="0" name="price" placeholder="Price (optional)" style="width: 140px;" />
         <button class="btn btn-small" type="submit">Add Item</button>
       </form>
     </div>
