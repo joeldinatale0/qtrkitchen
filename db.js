@@ -140,10 +140,10 @@ function seedIfEmpty() {
     );
     const starterItems = {
       food: [
-        ["Egg & Bacon Muffin", "ea", 20, 4.0],
+        ["Egg & Bacon Muffin", "ea", 20, 3.8],
         ["Egg & Bacon Wrap", "ea", null, 4.5],
         ["Egg & Bacon Toastie", "ea", null, 4.5],
-        ["Egg & Spinach Wrap", "ea", null, 4.5],
+        ["Egg & Spinach Wrap", "ea", null, 3.8],
         ["Ham Cheese Croissant", "ea", null, 4.0],
         ["Ham Cheese Toastie", "ea", null, 4.0],
         ["Cheese Toastie", "ea", null, 3.5],
@@ -151,15 +151,18 @@ function seedIfEmpty() {
         ["Spanakopita", "tray"],
         ["Halloumi Pie", "ea"],
         ["Lamb Ragu Toastie", "ea", null, 7.0],
-        ["Nonnas Meatball Toastie", "ea", null, 6.0],
+        ["Nonnas Meatball Toastie", "ea", null, 4.5],
         ["Chicken Schnitz Toastie", "ea", null, 5.0],
         ["Chicken Caesar Wrap", "ea", null, 4.0],
-        ["Sweet Chilli Chicken Wrap", "ea", null, 4.9],
+        ["Sweet Chilli Chicken Wrap", "ea", null, 4.8],
         ["Grilled Chicken & Avo Toastie", "ea", null, 5.0],
         ["Mushroom & Cheese Toastie", "ea", null, 4.0],
         ["Chicken Cheese & Mushroom Boat", "ea"],
         ["Chicken Cheese & BBQ Sauce Boat", "ea"],
         ["Vegetarian Toastie", "ea", null, 4.0],
+        ["Ruben Bagel", "ea", null, 6.5],
+        ["Salmon Bagel", "ea", null, 6.5],
+        ["Bacon & Egg Bagel", "ea", null, 5.0],
         // Essendon-only ingredient components
         ["Grilled Chicken Pieces", "ea", null, null, "essendon"],
         ["Chicken Schnitzel Pieces", "ea", null, null, "essendon"],
@@ -171,22 +174,23 @@ function seedIfEmpty() {
         ["Mushrooms", "container", null, null, "essendon"],
       ],
       cans: [
-        ["Oats - Nutella", "ea"],
-        ["Oats - Vanilla", "ea"],
-        ["Oats - Biscoff", "ea"],
-        ["Berry Chia", "ea"],
-        ["Mango Chia", "ea"],
-        ["Berry Yoghurt", "ea"],
-        ["Mango Yoghurt", "ea"],
+        ["Oats - Nutella", "ea", null, 3.0],
+        ["Oats - Vanilla", "ea", null, 3.0],
+        ["Oats - Biscoff", "ea", null, 3.0],
+        ["Berry Chia", "ea", null, 3.0],
+        ["Mango Chia", "ea", null, 3.0],
+        ["Berry Yoghurt", "ea", null, 3.0],
+        ["Mango Yoghurt", "ea", null, 3.0],
       ],
       juices: [
         ["Watermelon Juice", "2L"],
       ],
       pastries: [
-        ["Carrot Cake", "cake"],
-        ["Banana Bread Loaf", "loaf"],
+        ["Carrot Cake", "cake", null, 45.0],
+        ["Banana Bread Loaf", "loaf", null, 14.0],
         ["M&M Cookie", "ea"],
         ["Choc Chip Cookie", "ea"],
+        ["Sweet Muffins", "ea", null, 2.5],
       ],
       paper: [
         ["Coffee Cup 8oz", "sleeve"],
@@ -253,6 +257,10 @@ function seedParsIfEmpty() {
     "Mango Chia": 15,
     "Berry Yoghurt": 15,
     "Mango Yoghurt": 15,
+    "Ruben Bagel": 6,
+    "Salmon Bagel": 6,
+    "Bacon & Egg Bagel": 6,
+    "Sweet Muffins": 6,
   };
   const highpoint = getShop.get("highpoint");
   if (highpoint) {
@@ -277,6 +285,10 @@ function seedParsIfEmpty() {
     ["M&M Cookie", 10, 15],
     ["Banana Bread Loaf", 2, null],
     ["Carrot Cake", 1, null],
+    ["Ruben Bagel", 6, null],
+    ["Salmon Bagel", 6, null],
+    ["Bacon & Egg Bagel", 6, null],
+    ["Sweet Muffins", 6, null],
   ];
   for (const slug of ["essendon", "mooneeponds", "melbournecentral"]) {
     const shop = getShop.get(slug);
