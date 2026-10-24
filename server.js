@@ -39,7 +39,7 @@ function isLateSubmission() {
 // Fire-and-forget: never block the order-submit response on email delivery.
 // Sent via Resend's HTTPS API (not raw SMTP) since cloud hosts commonly block
 // outbound SMTP ports for spam prevention.
-function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate) {
+function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit) {
   if (!process.env.RESEND_API_KEY) return;
 
   const lines = orderedItems.map((i) => `  - ${i.quantity} x ${i.name} (${i.unit})`);
@@ -51,11 +51,19 @@ function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLa
     lines.push("  (no items selected)");
   }
 
+  const editNotice = isEdit
+    ? "THIS IS AN EDITED ORDER! Disregard the last order for this date — the list below replaces it entirely.\n\n"
+    : "";
   const lateNotice = isLate
     ? `This order was submitted after the ${ORDER_CUTOFF_HOUR}:00 cutoff.\n\n`
     : "";
-  const text = `${lateNotice}New order from ${shop.name} for delivery ${deliveryDateLabel}\n\n${lines.join("\n")}\n`;
-  const subject = `${isLate ? "LATE ORDER! " : ""}Order from ${shop.name} — delivery ${deliveryDateLabel}`;
+  const text = `${editNotice}${lateNotice}New order from ${shop.name} for delivery ${deliveryDateLabel}\n\n${lines.join("\n")}\n`;
+  const subjectPrefix = isEdit
+    ? "THIS IS AN EDITED ORDER! Disregard the last order — "
+    : isLate
+    ? "LATE ORDER! "
+    : "";
+  const subject = `${subjectPrefix}Order from ${shop.name} — delivery ${deliveryDateLabel}`;
 
   fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -488,6 +496,7 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   let order = db
     .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
     .get(shopId, deliveryDate);
+  const isEdit = !!order;
 
   if (order) {
     db.prepare("DELETE FROM order_items WHERE order_id = ?").run(order.id);
@@ -531,7 +540,7 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
     insertOrderItem.run(order.id, null, "Custom request", "", 1, null, note);
   }
 
-  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, customNotes, isLate);
+  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, customNotes, isLate, isEdit);
 
   res.redirect(`/order/complete?date=${deliveryDate}`);
 });
