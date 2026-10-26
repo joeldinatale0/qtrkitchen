@@ -433,24 +433,33 @@ function seedDelReIfEmpty() {
   });
 }
 
-// Weekday: 0 = Sunday .. 6 = Saturday, matching JS Date#getDay().
+// Weekday: 0 = Sunday .. 6 = Saturday, matching JS Date#getDay(). Seeds each
+// shop independently (not gated on the table being empty overall) so a new
+// shop's targets still get inserted even after earlier shops are already seeded.
 function seedSalesTargetsIfEmpty() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM shop_sales_targets").get().c;
-  if (count > 0) return;
   const insert = db.prepare(
     "INSERT INTO shop_sales_targets (shop_slug, weekday, target_cents) VALUES (?, ?, ?)"
   );
-  const essendonTargets = {
-    0: 550000, // Sunday $5.5k
-    1: 450000, // Monday $4.5k
-    2: 450000, // Tuesday $4.5k
-    3: 450000, // Wednesday $4.5k
-    4: 450000, // Thursday $4.5k
-    5: 470000, // Friday $4.7k
-    6: 600000, // Saturday $6k
+  const hasTargets = (slug) =>
+    db.prepare("SELECT 1 FROM shop_sales_targets WHERE shop_slug = ?").get(slug);
+
+  const targetsByShop = {
+    essendon: {
+      0: 550000, // Sunday $5.5k
+      1: 450000, // Monday $4.5k
+      2: 450000, // Tuesday $4.5k
+      3: 450000, // Wednesday $4.5k
+      4: 450000, // Thursday $4.5k
+      5: 470000, // Friday $4.7k
+      6: 600000, // Saturday $6k
+    },
   };
-  for (const [weekday, targetCents] of Object.entries(essendonTargets)) {
-    insert.run("essendon", Number(weekday), targetCents);
+
+  for (const [slug, targets] of Object.entries(targetsByShop)) {
+    if (hasTargets(slug)) continue;
+    for (const [weekday, targetCents] of Object.entries(targets)) {
+      insert.run(slug, Number(weekday), targetCents);
+    }
   }
 }
 

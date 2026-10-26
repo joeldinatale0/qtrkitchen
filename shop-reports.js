@@ -7,21 +7,27 @@ const SQUARE_API_BASE = "https://connect.squareup.com/v2";
 const SQUARE_VERSION = "2025-01-23";
 const TANDA_API_BASE = "https://my.tanda.co/api/v2";
 
-// Location IDs aren't secret (only the access tokens are) — one Square
-// merchant and one Tanda org cover all shops, just with different location
-// IDs per shop, so only two env vars (SQUARE_ACCESS_TOKEN, TANDA_ACCESS_TOKEN)
-// are needed no matter how many shops are connected here.
+// Location IDs aren't secret (only the access tokens are). Unlike Tanda
+// (one org covers every shop, just different location IDs), each shop is
+// its OWN separate Square merchant account — so each shop needs its own
+// Square access token env var, named per shop below.
 const SHOP_INTEGRATIONS = {
   essendon: {
     squareLocationId: "LJWTC3VTB52T3",
+    squareTokenEnvVar: "SQUARE_ACCESS_TOKEN",
     tandaLocationId: 409591,
+  },
+  highpoint: {
+    squareLocationId: "LWGVFS5B0JWS2",
+    squareTokenEnvVar: "SQUARE_ACCESS_TOKEN_HIGHPOINT",
+    tandaLocationId: 409592,
   },
 };
 
-function squareHeaders() {
+function squareHeaders(squareTokenEnvVar) {
   return {
     "Square-Version": SQUARE_VERSION,
-    Authorization: `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+    Authorization: `Bearer ${process.env[squareTokenEnvVar]}`,
     "Content-Type": "application/json",
   };
 }
@@ -71,13 +77,13 @@ function melbourneHourOf(date) {
   );
 }
 
-async function fetchSquareOrders(squareLocationId, startUtc, endUtc) {
+async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, endUtc) {
   const orders = [];
   let cursor;
   do {
     const res = await fetch(`${SQUARE_API_BASE}/orders/search`, {
       method: "POST",
-      headers: squareHeaders(),
+      headers: squareHeaders(squareTokenEnvVar),
       body: JSON.stringify({
         location_ids: [squareLocationId],
         limit: 100,
@@ -206,7 +212,7 @@ function topEntries(obj, n) {
 async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDateStr) {
   const config = SHOP_INTEGRATIONS[shopSlug];
   if (!config) return null;
-  if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.TANDA_ACCESS_TOKEN) return null;
+  if (!process.env[config.squareTokenEnvVar] || !process.env.TANDA_ACCESS_TOKEN) return null;
 
   const actualTodayStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Australia/Melbourne",
@@ -224,8 +230,8 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
   const now = new Date();
 
   const [orders, lastWeekOrders, departmentIds] = await Promise.all([
-    fetchSquareOrders(config.squareLocationId, startUtc, endUtc),
-    fetchSquareOrders(config.squareLocationId, lwStart, lwEnd),
+    fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc),
+    fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, lwStart, lwEnd),
     fetchTandaDepartmentIds(config.tandaLocationId),
   ]);
 
