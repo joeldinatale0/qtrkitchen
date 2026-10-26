@@ -912,7 +912,7 @@ app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
 });
 
 app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (req, res) => {
-  const { shop_slug, date } = req.body;
+  const { shop_slug, date, to } = req.body;
   const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shop_slug);
 
   if (!SHOP_INTEGRATIONS[shop_slug] || !shop || !process.env.RESEND_API_KEY) {
@@ -939,7 +939,7 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
       },
       body: JSON.stringify({
         from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: DAILY_REPORT_EMAIL_TO,
+        to: (to || "").trim() || DAILY_REPORT_EMAIL_TO,
         subject: `TEST Daily Report — ${shop.name} — ${report.dateStr}`,
         text: formatDailyReportEmail(report),
       }),

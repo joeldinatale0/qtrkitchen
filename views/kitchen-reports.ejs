@@ -38,6 +38,13 @@
           Tanda only reports live cost for the current day.
         </p>
 
+        <label for="to">Send to (optional)</label>
+        <input type="email" id="to" name="to" placeholder="defaults to thecoffeeqtr@gmail.com" style="width: 100%; margin-bottom: 8px;" />
+        <p class="muted" style="margin-top: -8px;">
+          Resend's sandbox can currently only deliver to qtrcentralkitchen@gmail.com
+          until a domain is verified at resend.com/domains — override here to test.
+        </p>
+
         <button class="btn btn-filled" type="submit">Send Test Report Now</button>
       </form>
     <% } %>
