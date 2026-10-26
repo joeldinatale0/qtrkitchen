@@ -720,7 +720,13 @@ app.get("/kitchen/delre", requireAuth, requireRole("kitchen"), (req, res) => {
     )
     .all();
 
-  res.render("kitchen-delre-history", { orders });
+  res.render("kitchen-delre-history", { orders, cleared: req.query.cleared === "1" });
+});
+
+app.post("/kitchen/delre/clear", requireAuth, requireRole("kitchen"), (req, res) => {
+  db.prepare("DELETE FROM delre_order_items").run();
+  db.prepare("DELETE FROM delre_orders").run();
+  res.redirect("/kitchen/delre?cleared=1");
 });
 
 app.get("/kitchen/delre/:orderId", requireAuth, requireRole("kitchen"), (req, res) => {

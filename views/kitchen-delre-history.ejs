@@ -5,6 +5,17 @@
   <h1>Del Re Order History</h1>
   <p class="subtitle">Every Del Re order placed by any shop, most recent first.</p>
 
+  <% if (cleared) { %>
+    <div class="success-banner">Del Re order history cleared.</div>
+  <% } %>
+
+  <% if (orders.length > 0) { %>
+    <form method="POST" action="/kitchen/delre/clear" class="no-print" style="margin-bottom: 24px;"
+          onsubmit="return confirm('Permanently delete ALL Del Re order history? This cannot be undone.');">
+      <button class="btn btn-small" type="submit">Clear All Del Re History</button>
+    </form>
+  <% } %>
+
   <div class="card">
     <% if (orders.length === 0) { %>
       <p class="muted">No Del Re orders yet.</p>
