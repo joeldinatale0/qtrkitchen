@@ -203,17 +203,19 @@ function topEntries(obj, n) {
     .slice(0, n);
 }
 
-async function buildDailyShopReport(db, shopSlug, shopName, addDays) {
+async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDateStr) {
   const config = SHOP_INTEGRATIONS[shopSlug];
   if (!config) return null;
   if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.TANDA_ACCESS_TOKEN) return null;
 
-  const dateStr = new Intl.DateTimeFormat("en-CA", {
+  const actualTodayStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Australia/Melbourne",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+  const dateStr = overrideDateStr || actualTodayStr;
+  const isToday = dateStr === actualTodayStr;
   const lastWeekStr = addDays(dateStr, -7);
   const weekday = new Date(dateStr + "T00:00:00").getDay();
 
@@ -231,8 +233,11 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays) {
   const lastWeek = summarizeSquareOrders(lastWeekOrders);
 
   const shifts = await fetchTandaShifts(dateStr);
-  const labour = summarizeTandaShifts(shifts, departmentIds, dateStr, now);
-  const labourCost = await fetchTandaLiveLabourCost(config.tandaLocationId);
+  const labour = summarizeTandaShifts(shifts, departmentIds, dateStr, isToday ? now : new Date(endUtc));
+  // Tanda's live wage tracker only ever reports the CURRENT day's cumulative
+  // cost — it cannot be queried for a past date, so for any date other than
+  // today the $ labour cost is genuinely unavailable (not faked as $0).
+  const labourCost = isToday ? await fetchTandaLiveLabourCost(config.tandaLocationId) : null;
 
   let busiestHour = null;
   for (const [h, v] of Object.entries(today.hourly)) {
@@ -264,6 +269,7 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays) {
   return {
     shopName,
     dateStr,
+    isToday,
     netSales: today.netSales,
     transactionCount: today.transactionCount,
     avgSpend: today.transactionCount ? today.netSales / today.transactionCount : 0,
@@ -272,7 +278,7 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays) {
     lastWeekNetSales: lastWeek.netSales,
     labourHours: labour.totalHours,
     labourCost,
-    labourPct: today.netSales ? (labourCost / today.netSales) * 100 : null,
+    labourPct: labourCost !== null && today.netSales ? (labourCost / today.netSales) * 100 : null,
     salesPerLabourHour: labour.totalHours ? today.netSales / labour.totalHours : null,
     transactionsPerLabourHour: labour.totalHours ? today.transactionCount / labour.totalHours : null,
     busiestHour,
@@ -313,7 +319,9 @@ function formatDailyReportEmail(report) {
 
   const lines = [
     `Daily report — ${report.shopName} — ${report.dateStr}`,
-    `(as of send time; today's trading may not be fully complete)`,
+    report.isToday
+      ? `(as of send time; today's trading may not be fully complete)`
+      : `(labour $ cost is not shown — Tanda only provides live cost for the current day, not past dates)`,
     ``,
     `SALES`,
     `  Total net sales: ${money(report.netSales)}`,
@@ -326,7 +334,7 @@ function formatDailyReportEmail(report) {
     ``,
     `LABOUR`,
     `  Labour hours: ${report.labourHours.toFixed(2)}`,
-    `  Labour cost (actual, so far today): ${money(report.labourCost)}`,
+    `  Labour cost: ${report.labourCost !== null ? money(report.labourCost) : "n/a (today only)"}`,
     `  Labour %: ${report.labourPct !== null ? report.labourPct.toFixed(1) + "%" : "n/a"}`,
     `  Sales per labour hour: ${report.salesPerLabourHour !== null ? money(report.salesPerLabourHour) : "n/a"}`,
     `  Transactions per labour hour: ${

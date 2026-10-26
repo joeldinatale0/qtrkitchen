@@ -1,0 +1,45 @@
+<%- include('partials/head', { title: "Daily Reports — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Daily Shop Reports</h1>
+  <p class="subtitle">
+    Send a daily sales/labour report email on demand — useful for testing, or
+    resending a past date. The real daily report sends itself automatically
+    every day at 5pm Melbourne time.
+  </p>
+
+  <% if (sent) { %>
+    <div class="success-banner">Report email sent.</div>
+  <% } %>
+  <% if (error) { %>
+    <div class="error">Couldn't send that report — check the shop is connected and RESEND_API_KEY/SQUARE_ACCESS_TOKEN/TANDA_ACCESS_TOKEN are set.</div>
+  <% } %>
+
+  <div class="card">
+    <% if (shops.length === 0) { %>
+      <p class="muted">No shops are connected to Square/Tanda yet.</p>
+    <% } else { %>
+      <form method="POST" action="/kitchen/reports/send">
+        <label for="shop_slug">Shop</label>
+        <select id="shop_slug" name="shop_slug" style="margin-bottom: 16px;">
+          <% shops.forEach(function(s) { %>
+            <option value="<%= s.slug %>"><%= s.name %></option>
+          <% }) %>
+        </select>
+
+        <label for="date">Date</label>
+        <input type="date" id="date" name="date" style="margin-bottom: 16px;" />
+        <p class="muted" style="margin-top: -8px;">
+          Leave blank for today. For any past date, labour $ cost won't be included —
+          Tanda only reports live cost for the current day.
+        </p>
+
+        <button class="btn btn-filled" type="submit">Send Test Report Now</button>
+      </form>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

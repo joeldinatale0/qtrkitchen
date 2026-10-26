@@ -896,6 +896,54 @@ app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req,
   res.redirect("/kitchen/items?saved=1");
 });
 
+// ---------- Kitchen: daily shop reports (Square + Tanda) ----------
+
+app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shopSlugs = Object.keys(SHOP_INTEGRATIONS);
+  const shops = shopSlugs
+    .map((slug) => db.prepare("SELECT * FROM users WHERE slug = ?").get(slug))
+    .filter(Boolean);
+  res.render("kitchen-reports", {
+    shops,
+    sent: req.query.sent === "1",
+    error: req.query.error === "1",
+  });
+});
+
+app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const { shop_slug, date } = req.body;
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shop_slug);
+
+  if (!SHOP_INTEGRATIONS[shop_slug] || !shop || !process.env.RESEND_API_KEY) {
+    return res.redirect("/kitchen/reports?error=1");
+  }
+
+  try {
+    const report = await buildDailyShopReport(db, shop_slug, shop.name, addDays, date || undefined);
+    if (!report) return res.redirect("/kitchen/reports?error=1");
+
+    const res2 = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to: DAILY_REPORT_EMAIL_TO,
+        subject: `TEST Daily Report — ${shop.name} — ${report.dateStr}`,
+        text: formatDailyReportEmail(report),
+      }),
+    });
+    if (!res2.ok) throw new Error(`${res2.status} ${await res2.text()}`);
+
+    res.redirect("/kitchen/reports?sent=1");
+  } catch (err) {
+    console.error("Test report send failed:", err.message);
+    res.redirect("/kitchen/reports?error=1");
+  }
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
