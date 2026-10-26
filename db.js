@@ -453,6 +453,15 @@ function seedSalesTargetsIfEmpty() {
       5: 470000, // Friday $4.7k
       6: 600000, // Saturday $6k
     },
+    highpoint: {
+      0: 800000, // Sunday $8k
+      1: 500000, // Monday $5k
+      2: 500000, // Tuesday $5k
+      3: 500000, // Wednesday $5k
+      4: 600000, // Thursday $6k
+      5: 700000, // Friday $7k
+      6: 900000, // Saturday $9k
+    },
   };
 
   for (const [slug, targets] of Object.entries(targetsByShop)) {
