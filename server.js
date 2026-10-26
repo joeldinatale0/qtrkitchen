@@ -907,6 +907,7 @@ app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
     shops,
     sent: req.query.sent === "1",
     error: req.query.error === "1",
+    errorMsg: req.query.msg || "",
   });
 });
 
@@ -915,12 +916,20 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
   const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shop_slug);
 
   if (!SHOP_INTEGRATIONS[shop_slug] || !shop || !process.env.RESEND_API_KEY) {
-    return res.redirect("/kitchen/reports?error=1");
+    return res.redirect(
+      `/kitchen/reports?error=1&msg=${encodeURIComponent("Shop not connected, or RESEND_API_KEY is missing")}`
+    );
   }
 
   try {
     const report = await buildDailyShopReport(db, shop_slug, shop.name, addDays, date || undefined);
-    if (!report) return res.redirect("/kitchen/reports?error=1");
+    if (!report) {
+      return res.redirect(
+        `/kitchen/reports?error=1&msg=${encodeURIComponent(
+          "SQUARE_ACCESS_TOKEN or TANDA_ACCESS_TOKEN is missing"
+        )}`
+      );
+    }
 
     const res2 = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -940,7 +949,7 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
     res.redirect("/kitchen/reports?sent=1");
   } catch (err) {
     console.error("Test report send failed:", err.message);
-    res.redirect("/kitchen/reports?error=1");
+    res.redirect(`/kitchen/reports?error=1&msg=${encodeURIComponent(err.message)}`);
   }
 });
 

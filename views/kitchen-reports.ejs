@@ -13,7 +13,10 @@
     <div class="success-banner">Report email sent.</div>
   <% } %>
   <% if (error) { %>
-    <div class="error">Couldn't send that report — check the shop is connected and RESEND_API_KEY/SQUARE_ACCESS_TOKEN/TANDA_ACCESS_TOKEN are set.</div>
+    <div class="error">
+      Couldn't send that report.
+      <% if (errorMsg) { %><br /><code><%= errorMsg %></code><% } %>
+    </div>
   <% } %>
 
   <div class="card">
