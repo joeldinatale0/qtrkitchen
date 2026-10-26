@@ -105,7 +105,7 @@ function summarizeSquareOrders(orders) {
   let netSales = 0;
   let totalDiscounts = 0;
   const hourly = {}; // hour -> { sales, count }
-  const productQty = {}; // name -> quantity
+  const productRevenue = {}; // name -> $ net revenue
 
   for (const order of orders) {
     const total = (order.total_money?.amount || 0) / 100;
@@ -118,12 +118,12 @@ function summarizeSquareOrders(orders) {
     hourly[hour].count += 1;
 
     for (const li of order.line_items || []) {
-      const qty = Number(li.quantity) || 0;
-      productQty[li.name] = (productQty[li.name] || 0) + qty;
+      const revenue = (li.total_money?.amount || 0) / 100;
+      productRevenue[li.name] = (productRevenue[li.name] || 0) + revenue;
     }
   }
 
-  return { netSales, totalDiscounts, transactionCount: orders.length, hourly, productQty };
+  return { netSales, totalDiscounts, transactionCount: orders.length, hourly, productRevenue };
 }
 
 async function fetchTandaDepartmentIds(tandaLocationId) {
@@ -284,8 +284,8 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     busiestHour,
     mostEfficientHour,
     leastEfficientHour,
-    topProducts: topEntries(today.productQty, 5),
-    lowestProducts: topEntries(today.productQty, 1000).slice(-5).reverse(),
+    topProducts: topEntries(today.productRevenue, 5),
+    lowestProducts: topEntries(today.productRevenue, 1000).slice(-5).reverse(),
   };
 }
 
@@ -343,11 +343,11 @@ function formatDailyReportEmail(report) {
     `  Most efficient trading hour: ${hourLabel(report.mostEfficientHour)}`,
     `  Least efficient staffed hour: ${hourLabel(report.leastEfficientHour)}`,
     ``,
-    `TOP-SELLING PRODUCTS`,
-    ...report.topProducts.map(([name, qty]) => `  ${qty} x ${name}`),
+    `TOP-GROSSING PRODUCTS`,
+    ...report.topProducts.map(([name, revenue]) => `  ${money(revenue)} — ${name}`),
     ``,
-    `LOWEST-SELLING PRODUCTS`,
-    ...report.lowestProducts.map(([name, qty]) => `  ${qty} x ${name}`),
+    `LOWEST-GROSSING PRODUCTS`,
+    ...report.lowestProducts.map(([name, revenue]) => `  ${money(revenue)} — ${name}`),
     ``,
     `(COGS/prime cost, cash discrepancy, waste/remakes and sold-out products are not yet tracked — left out of this report.)`,
   ];
