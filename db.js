@@ -163,6 +163,7 @@ function seedIfEmpty() {
         ["Ruben Bagel", "ea", null, 6.5],
         ["Salmon Bagel", "ea", null, 6.5],
         ["Bacon & Egg Bagel", "ea", null, 5.0],
+        ["Birria Toastie", "ea"],
         // Essendon-only ingredient components
         ["Grilled Chicken Pieces", "ea", null, null, "essendon"],
         ["Chicken Schnitzel Pieces", "ea", null, null, "essendon"],
@@ -276,6 +277,7 @@ function seedParsIfEmpty() {
     "Salmon Bagel": 6,
     "Bacon & Egg Bagel": 6,
     "Sweet Muffins": 6,
+    "Birria Toastie": 6,
   };
   const highpoint = getShop.get("highpoint");
   if (highpoint) {
@@ -304,6 +306,7 @@ function seedParsIfEmpty() {
     ["Salmon Bagel", 6, null],
     ["Bacon & Egg Bagel", 6, null],
     ["Sweet Muffins", 6, null],
+    ["Birria Toastie", 6, null],
   ];
   for (const slug of ["essendon", "mooneeponds", "melbournecentral"]) {
     const shop = getShop.get(slug);
