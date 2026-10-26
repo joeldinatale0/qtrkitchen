@@ -111,7 +111,7 @@ function summarizeSquareOrders(orders) {
   let netSales = 0;
   let totalDiscounts = 0;
   const hourly = {}; // hour -> { sales, count }
-  const productRevenue = {}; // name -> $ net revenue
+  const productStats = {}; // name -> { revenue, qty }
 
   for (const order of orders) {
     const total = (order.total_money?.amount || 0) / 100;
@@ -125,11 +125,14 @@ function summarizeSquareOrders(orders) {
 
     for (const li of order.line_items || []) {
       const revenue = (li.total_money?.amount || 0) / 100;
-      productRevenue[li.name] = (productRevenue[li.name] || 0) + revenue;
+      const qty = Number(li.quantity) || 0;
+      if (!productStats[li.name]) productStats[li.name] = { revenue: 0, qty: 0 };
+      productStats[li.name].revenue += revenue;
+      productStats[li.name].qty += qty;
     }
   }
 
-  return { netSales, totalDiscounts, transactionCount: orders.length, hourly, productRevenue };
+  return { netSales, totalDiscounts, transactionCount: orders.length, hourly, productStats };
 }
 
 async function fetchTandaDepartmentIds(tandaLocationId) {
@@ -203,10 +206,13 @@ function summarizeTandaShifts(shifts, departmentIds, dateStr, now) {
   return { totalHours, hourly };
 }
 
-function topEntries(obj, n) {
-  return Object.entries(obj)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, n);
+// Ranks product stats {name: {revenue, qty}} by revenue, returning
+// [name, revenue, qty] triples.
+function topProductEntries(productStats, n) {
+  return Object.entries(productStats)
+    .sort((a, b) => b[1].revenue - a[1].revenue)
+    .slice(0, n)
+    .map(([name, stats]) => [name, stats.revenue, stats.qty]);
 }
 
 async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDateStr) {
@@ -290,8 +296,8 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     busiestHour,
     mostEfficientHour,
     leastEfficientHour,
-    topProducts: topEntries(today.productRevenue, 5),
-    lowestProducts: topEntries(today.productRevenue, 1000).slice(-5).reverse(),
+    topProducts: topProductEntries(today.productStats, 5),
+    lowestProducts: topProductEntries(today.productStats, 1000).slice(-5).reverse(),
   };
 }
 
@@ -350,10 +356,10 @@ function formatDailyReportEmail(report) {
     `  Least efficient staffed hour: ${hourLabel(report.leastEfficientHour)}`,
     ``,
     `TOP-GROSSING PRODUCTS`,
-    ...report.topProducts.map(([name, revenue]) => `  ${money(revenue)} — ${name}`),
+    ...report.topProducts.map(([name, revenue, qty]) => `  ${money(revenue)} — ${name} (${qty} sold)`),
     ``,
     `LOWEST-GROSSING PRODUCTS`,
-    ...report.lowestProducts.map(([name, revenue]) => `  ${money(revenue)} — ${name}`),
+    ...report.lowestProducts.map(([name, revenue, qty]) => `  ${money(revenue)} — ${name} (${qty} sold)`),
     ``,
     `(COGS/prime cost, cash discrepancy, waste/remakes and sold-out products are not yet tracked — left out of this report.)`,
   ];
