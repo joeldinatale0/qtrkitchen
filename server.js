@@ -615,7 +615,9 @@ app.get("/delre/order/complete", requireAuth, requireRole("shop"), (req, res) =>
     .prepare("SELECT * FROM delre_order_items WHERE order_id = ? ORDER BY id")
     .all(order.id);
 
-  const textList = orderItems.map((oi) => `${oi.name} x${oi.quantity} ${oi.unit}`).join("\n");
+  const itemLines = orderItems.map((oi) => `${oi.name} x${oi.quantity} ${oi.unit}`).join("\n");
+  const greeting = `Can I please place an order for Coffee ${req.session.user.name}`;
+  const textList = `${greeting}\n\n${itemLines}`;
 
   res.render("delre-order-complete", { order, orderItems, textList });
 });
