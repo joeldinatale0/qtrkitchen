@@ -343,6 +343,15 @@ function requireRole(role) {
   };
 }
 
+function requireShopSlug(slug) {
+  return (req, res, next) => {
+    if (!req.session.user || req.session.user.slug !== slug) {
+      return res.status(403).send("Forbidden");
+    }
+    next();
+  };
+}
+
 app.use((req, res, next) => {
   res.locals.currentUser = req.session.user || null;
   res.locals.formatDate = formatDate;
@@ -353,7 +362,9 @@ app.use((req, res, next) => {
 
 app.get("/", (req, res) => {
   if (req.session.user) {
-    return res.redirect(req.session.user.role === "kitchen" ? "/kitchen" : "/choose-ordering");
+    if (req.session.user.role === "kitchen") return res.redirect("/kitchen");
+    const landing = req.session.user.slug === "essendon" ? "/choose-ordering" : "/order/select-date";
+    return res.redirect(landing);
   }
   const shops = db
     .prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name")
@@ -363,6 +374,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/choose-ordering", requireAuth, requireRole("shop"), (req, res) => {
+  if (req.session.user.slug !== "essendon") return res.redirect("/order/select-date");
   res.render("choose-ordering");
 });
 
@@ -568,7 +580,7 @@ app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
 
 // ---------- Shop: Del Re supplier ordering (separate from the kitchen flow) ----------
 
-app.get("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
+app.get("/delre/order", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
   const categories = db
     .prepare("SELECT * FROM delre_categories ORDER BY sort_order")
     .all();
@@ -582,7 +594,7 @@ app.get("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
   res.render("delre-order", { categories });
 });
 
-app.post("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
+app.post("/delre/order", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
   const items = db.prepare("SELECT * FROM delre_items WHERE active = 1").all();
 
   const { lastInsertRowid: orderId } = db
@@ -605,7 +617,7 @@ app.post("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
   res.redirect(`/delre/order/complete?id=${orderId}`);
 });
 
-app.get("/delre/order/complete", requireAuth, requireRole("shop"), (req, res) => {
+app.get("/delre/order/complete", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
   const order = db
     .prepare("SELECT * FROM delre_orders WHERE id = ? AND shop_id = ?")
     .get(req.query.id, req.session.user.id);

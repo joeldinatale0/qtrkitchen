@@ -9,7 +9,9 @@
 
   <div class="store-grid">
     <a class="store-tile" href="/order/select-date">Food Ordering</a>
-    <a class="store-tile" href="/delre/order">Del Re Ordering</a>
+    <% if (currentUser.slug === 'essendon') { %>
+      <a class="store-tile" href="/delre/order">Del Re Ordering</a>
+    <% } %>
   </div>
 </div>
 
