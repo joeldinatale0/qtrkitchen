@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const db = require("./db");
 const { buildWeeklySummaryPdf } = require("./invoice-pdf");
+const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail } = require("./shop-reports");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const EMAIL_TO = process.env.ORDER_EMAIL_TO || "qtrcentralkitchen@gmail.com";
+const DAILY_REPORT_EMAIL_TO = process.env.DAILY_REPORT_EMAIL_TO || "thecoffeeqtr@gmail.com";
 const ORDER_CUTOFF_HOUR = 14; // 2:00 PM
 
 // Orders are due by 2:00 PM Melbourne time each day for next-day delivery.
@@ -241,10 +243,58 @@ async function sendWeeklySummaryIfDue() {
   }
 }
 
+const DAILY_SHOP_REPORT_HOUR = 17; // 5:00 PM Melbourne time
+
+async function sendDailyShopReportsIfDue() {
+  if (!process.env.RESEND_API_KEY) return;
+  if (melbourneHour() < DAILY_SHOP_REPORT_HOUR) return;
+  const today = melbourneDateString();
+
+  for (const shopSlug of Object.keys(SHOP_INTEGRATIONS)) {
+    const already = db
+      .prepare("SELECT 1 FROM daily_report_log WHERE report_date = ? AND shop_slug = ?")
+      .get(today, shopSlug);
+    if (already) continue;
+
+    const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shopSlug);
+    if (!shop) continue;
+
+    try {
+      const report = await buildDailyShopReport(db, shopSlug, shop.name, addDays);
+      if (!report) continue; // missing Square/Tanda credentials
+
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+          to: DAILY_REPORT_EMAIL_TO,
+          subject: `Daily Report — ${shop.name} — ${today}`,
+          text: formatDailyReportEmail(report),
+        }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+      db.prepare("INSERT INTO daily_report_log (report_date, shop_slug) VALUES (?, ?)").run(
+        today,
+        shopSlug
+      );
+      console.log(`Daily shop report emailed for ${shop.name}, ${today}`);
+    } catch (err) {
+      console.error(`Daily shop report failed for ${shopSlug}:`, err.message);
+    }
+  }
+}
+
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
+setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
 sendDailyBackupIfDue();
 sendWeeklySummaryIfDue();
+sendDailyShopReportsIfDue();
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));

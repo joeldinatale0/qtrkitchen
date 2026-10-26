@@ -111,6 +111,22 @@ db.exec(`
     current_stock INTEGER,
     quantity INTEGER NOT NULL
   );
+
+  -- Daily sales targets per shop, by weekday (0 = Sunday .. 6 = Saturday),
+  -- used by the daily shop report email's "sales vs target" line.
+  CREATE TABLE IF NOT EXISTS shop_sales_targets (
+    shop_slug TEXT NOT NULL,
+    weekday INTEGER NOT NULL,
+    target_cents INTEGER NOT NULL,
+    PRIMARY KEY (shop_slug, weekday)
+  );
+
+  CREATE TABLE IF NOT EXISTS daily_report_log (
+    report_date TEXT NOT NULL,
+    shop_slug TEXT NOT NULL,
+    sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(report_date, shop_slug)
+  );
 `);
 
 // Idempotent migrations for columns added after initial release — safe to
@@ -417,9 +433,31 @@ function seedDelReIfEmpty() {
   });
 }
 
+// Weekday: 0 = Sunday .. 6 = Saturday, matching JS Date#getDay().
+function seedSalesTargetsIfEmpty() {
+  const count = db.prepare("SELECT COUNT(*) AS c FROM shop_sales_targets").get().c;
+  if (count > 0) return;
+  const insert = db.prepare(
+    "INSERT INTO shop_sales_targets (shop_slug, weekday, target_cents) VALUES (?, ?, ?)"
+  );
+  const essendonTargets = {
+    0: 550000, // Sunday $5.5k
+    1: 450000, // Monday $4.5k
+    2: 450000, // Tuesday $4.5k
+    3: 450000, // Wednesday $4.5k
+    4: 450000, // Thursday $4.5k
+    5: 470000, // Friday $4.7k
+    6: 600000, // Saturday $6k
+  };
+  for (const [weekday, targetCents] of Object.entries(essendonTargets)) {
+    insert.run("essendon", Number(weekday), targetCents);
+  }
+}
+
 seedIfEmpty();
 seedParsIfEmpty();
 seedDelReIfEmpty();
+seedSalesTargetsIfEmpty();
 
 module.exports = db;
 module.exports.dbPath = dbPath;
