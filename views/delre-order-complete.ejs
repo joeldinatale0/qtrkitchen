@@ -1,0 +1,35 @@
+<%- include('partials/head', { title: "Del Re Order Submitted — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Del Re Order Submitted</h1>
+  <p class="subtitle">Copy the list below and text it to the supplier.</p>
+
+  <% if (orderItems.length === 0) { %>
+    <div class="card">
+      <p class="muted">No items were ordered.</p>
+    </div>
+  <% } else { %>
+    <div class="card">
+      <textarea id="order-text" readonly style="min-height: <%= Math.max(120, orderItems.length * 24) %>px;"><%= textList %></textarea>
+    </div>
+
+    <button class="btn btn-filled no-print" type="button" onclick="copyOrder()">Copy to Clipboard</button>
+    <span id="copied-msg" class="muted" style="display:none; margin-left: 12px;">Copied!</span>
+  <% } %>
+
+  <p style="margin-top: 32px;"><a class="btn btn-small" href="/choose-ordering">Done</a></p>
+</div>
+
+<script>
+  function copyOrder() {
+    var textarea = document.getElementById('order-text');
+    textarea.select();
+    navigator.clipboard.writeText(textarea.value).then(function () {
+      document.getElementById('copied-msg').style.display = 'inline';
+    });
+  }
+</script>
+
+</body>
+</html>

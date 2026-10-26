@@ -353,13 +353,17 @@ app.use((req, res, next) => {
 
 app.get("/", (req, res) => {
   if (req.session.user) {
-    return res.redirect(req.session.user.role === "kitchen" ? "/kitchen" : "/order/select-date");
+    return res.redirect(req.session.user.role === "kitchen" ? "/kitchen" : "/choose-ordering");
   }
   const shops = db
     .prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name")
     .all();
   const kitchen = db.prepare("SELECT * FROM users WHERE role = 'kitchen'").get();
   res.render("home", { shops, kitchen });
+});
+
+app.get("/choose-ordering", requireAuth, requireRole("shop"), (req, res) => {
+  res.render("choose-ordering");
 });
 
 app.get("/login", (req, res) => {
@@ -562,6 +566,60 @@ app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
   res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late });
 });
 
+// ---------- Shop: Del Re supplier ordering (separate from the kitchen flow) ----------
+
+app.get("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
+  const categories = db
+    .prepare("SELECT * FROM delre_categories ORDER BY sort_order")
+    .all();
+  const items = db
+    .prepare("SELECT * FROM delre_items WHERE active = 1 ORDER BY sort_order")
+    .all();
+  categories.forEach((cat) => {
+    cat.items = items.filter((i) => i.category_id === cat.id);
+  });
+
+  res.render("delre-order", { categories });
+});
+
+app.post("/delre/order", requireAuth, requireRole("shop"), (req, res) => {
+  const items = db.prepare("SELECT * FROM delre_items WHERE active = 1").all();
+
+  const { lastInsertRowid: orderId } = db
+    .prepare("INSERT INTO delre_orders (shop_id) VALUES (?)")
+    .run(req.session.user.id);
+
+  const insertOrderItem = db.prepare(
+    "INSERT INTO delre_order_items (order_id, item_id, name, unit, current_stock, quantity) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+
+  for (const item of items) {
+    const rawQty = req.body[`order_${item.id}`];
+    const qty = parseInt(rawQty, 10);
+    if (!qty || qty <= 0) continue;
+    const rawStock = req.body[`stock_${item.id}`];
+    const stock = rawStock !== undefined && rawStock !== "" ? parseInt(rawStock, 10) : null;
+    insertOrderItem.run(orderId, item.id, item.name, item.unit, stock, qty);
+  }
+
+  res.redirect(`/delre/order/complete?id=${orderId}`);
+});
+
+app.get("/delre/order/complete", requireAuth, requireRole("shop"), (req, res) => {
+  const order = db
+    .prepare("SELECT * FROM delre_orders WHERE id = ? AND shop_id = ?")
+    .get(req.query.id, req.session.user.id);
+  if (!order) return res.redirect("/delre/order");
+
+  const orderItems = db
+    .prepare("SELECT * FROM delre_order_items WHERE order_id = ? ORDER BY id")
+    .all(order.id);
+
+  const textList = orderItems.map((oi) => `${oi.name} x${oi.quantity} ${oi.unit}`).join("\n");
+
+  res.render("delre-order-complete", { order, orderItems, textList });
+});
+
 // ---------- Kitchen: dashboard ----------
 
 app.get("/kitchen", requireAuth, requireRole("kitchen"), (req, res) => {
@@ -633,6 +691,40 @@ app.post("/kitchen/history/clear", requireAuth, requireRole("kitchen"), (req, re
   db.prepare("DELETE FROM order_items").run();
   db.prepare("DELETE FROM orders").run();
   res.redirect("/kitchen/history?cleared=1");
+});
+
+app.get("/kitchen/delre", requireAuth, requireRole("kitchen"), (req, res) => {
+  const orders = db
+    .prepare(
+      `SELECT o.id, o.created_at, u.name AS shop_name,
+              SUM(oi.quantity) AS total_items
+       FROM delre_orders o
+       JOIN users u ON u.id = o.shop_id
+       LEFT JOIN delre_order_items oi ON oi.order_id = o.id
+       GROUP BY o.id
+       ORDER BY o.created_at DESC`
+    )
+    .all();
+
+  res.render("kitchen-delre-history", { orders });
+});
+
+app.get("/kitchen/delre/:orderId", requireAuth, requireRole("kitchen"), (req, res) => {
+  const order = db
+    .prepare(
+      `SELECT o.id, o.created_at, u.name AS shop_name
+       FROM delre_orders o
+       JOIN users u ON u.id = o.shop_id
+       WHERE o.id = ?`
+    )
+    .get(req.params.orderId);
+  if (!order) return res.redirect("/kitchen/delre");
+
+  const orderItems = db
+    .prepare("SELECT * FROM delre_order_items WHERE order_id = ? ORDER BY id")
+    .all(order.id);
+
+  res.render("kitchen-delre-order", { order, orderItems });
 });
 
 app.get(

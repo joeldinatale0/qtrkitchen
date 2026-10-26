@@ -1,0 +1,88 @@
+<%- include('partials/head', { title: "Del Re Order — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/choose-ordering">&larr; Back</a></p>
+  <h1>Del Re Order</h1>
+  <p class="subtitle">
+    Enter what's currently on hand — the order quantity will be suggested automatically based on par level.
+    You can adjust it before submitting. Once submitted you'll get a list to copy and text to the supplier.
+  </p>
+
+  <form method="POST" action="/delre/order">
+    <% categories.forEach(function(cat) { %>
+      <h2><%= cat.name %></h2>
+      <div class="card">
+        <% cat.items.forEach(function(item) { %>
+          <div class="item-row par-row">
+            <div class="item-name">
+              <%= item.name %>
+              <span class="item-unit">/ <%= item.unit %></span>
+              <span class="muted">(par <%= item.par_level %>)</span>
+            </div>
+            <div class="par-inputs">
+              <label>
+                On Hand
+                <input
+                  type="number"
+                  class="par-stock"
+                  data-par="<%= item.par_level %>"
+                  data-target="#order_<%= item.id %>"
+                  min="0"
+                  step="1"
+                  name="stock_<%= item.id %>"
+                  placeholder="0"
+                />
+              </label>
+              <label>
+                Suggested
+                <input type="text" class="par-suggested" readonly value="" tabindex="-1" />
+              </label>
+              <label>
+                Order
+                <input
+                  type="number"
+                  id="order_<%= item.id %>"
+                  name="order_<%= item.id %>"
+                  min="0"
+                  step="1"
+                  placeholder="0"
+                />
+              </label>
+            </div>
+          </div>
+        <% }) %>
+        <% if (cat.items.length === 0) { %>
+          <p class="muted">No items in this category yet.</p>
+        <% } %>
+      </div>
+    <% }) %>
+
+    <button class="btn btn-filled" type="submit">Submit Del Re Order</button>
+  </form>
+</div>
+
+<script>
+  document.querySelectorAll('.par-stock').forEach(function (stockInput) {
+    var par = parseInt(stockInput.dataset.par, 10);
+    var suggestedInput = stockInput.closest('.par-inputs').querySelector('.par-suggested');
+    var orderInput = document.querySelector(stockInput.dataset.target);
+
+    function update() {
+      var stock = parseInt(stockInput.value, 10);
+      if (isNaN(stock)) {
+        suggestedInput.value = '';
+        return;
+      }
+      var suggested = Math.max(par - stock, 0);
+      suggestedInput.value = suggested;
+      orderInput.value = suggested;
+    }
+
+    stockInput.addEventListener('input', update);
+    update();
+  });
+</script>
+
+</body>
+</html>

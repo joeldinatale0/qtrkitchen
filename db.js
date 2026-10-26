@@ -75,6 +75,42 @@ db.exec(`
     sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(week_start_date, shop_id)
   );
+
+  -- Del Re is a separate wholesale supplier, entirely independent of the
+  -- central kitchen catalog/order flow above. Shops fill in a par/stock
+  -- checklist and get back a plain-text list to copy and text the supplier;
+  -- the kitchen can browse every past submission across all shops.
+  CREATE TABLE IF NOT EXISTS delre_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS delre_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id INTEGER NOT NULL REFERENCES delre_categories(id),
+    name TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT 'ea',
+    par_level INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS delre_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS delre_order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL REFERENCES delre_orders(id) ON DELETE CASCADE,
+    item_id INTEGER REFERENCES delre_items(id),
+    name TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT 'ea',
+    current_stock INTEGER,
+    quantity INTEGER NOT NULL
+  );
 `);
 
 // Idempotent migrations for columns added after initial release — safe to
@@ -318,8 +354,72 @@ function seedParsIfEmpty() {
   }
 }
 
+function seedDelReIfEmpty() {
+  const catCount = db.prepare("SELECT COUNT(*) AS c FROM delre_categories").get().c;
+  if (catCount > 0) return;
+
+  const insertCat = db.prepare(
+    "INSERT INTO delre_categories (name, sort_order) VALUES (?, ?)"
+  );
+  const insertItem = db.prepare(
+    "INSERT INTO delre_items (category_id, name, unit, par_level, sort_order) VALUES (?, ?, ?, ?, ?)"
+  );
+
+  const sections = [
+    ["Dairy & Creams", [["Vanilla Ice Cream", "tub", 2]]],
+    [
+      "Frozen Fruits",
+      [
+        ["Frozen Strawberries", "bag", 4],
+        ["Frozen Mango", "bag", 4],
+        ["Frozen Blueberries", "bag", 4],
+      ],
+    ],
+    [
+      "Sweeteners & Syrups",
+      [
+        ["Maple Syrup", "bottle", 6],
+        ["Honey", "bottle", 3],
+      ],
+    ],
+    [
+      "Other Essentials",
+      [
+        ["Marshmallows", "bag", 2],
+        ["Veg Oil", "2L", 4],
+      ],
+    ],
+    [
+      "Dry Goods & Baking",
+      [
+        ["Muffin Mix", "bag", 2],
+        ["Self Raising Flour", "bag", 2],
+        ["Plain Flour", "bag", 2],
+        ["Brown Sugar", "bag", 2],
+        ["Caster Sugar", "bag", 2],
+        ["Cinnamon", "bag", 1],
+        ["Vanilla Extract", "bottle", 2],
+        ["Nutella", "tub", 1],
+        ["Biscoff", "tub", 1],
+        ["Milk Choc Chips Callebaut", "bag", 3],
+        ["Dark Choc Chips Callebaut", "bag", 1],
+        ["Chia Seeds", "kg", 2],
+        ['10" Flour Tortilla', "box", 2],
+      ],
+    ],
+  ];
+
+  sections.forEach(([catName, items], ci) => {
+    const { lastInsertRowid: catId } = insertCat.run(catName, ci + 1);
+    items.forEach(([name, unit, par], i) => {
+      insertItem.run(catId, name, unit, par, i + 1);
+    });
+  });
+}
+
 seedIfEmpty();
 seedParsIfEmpty();
+seedDelReIfEmpty();
 
 module.exports = db;
 module.exports.dbPath = dbPath;

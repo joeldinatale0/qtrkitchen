@@ -1,0 +1,36 @@
+<%- include('partials/head', { title: "Del Re Order — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/delre">&larr; Back to Del Re history</a></p>
+  <h1><%= order.shop_name %></h1>
+  <p class="subtitle"><%= formatDate(order.created_at.slice(0, 10)) %> at <%= order.created_at.slice(11, 16) %></p>
+
+  <div class="card">
+    <% if (orderItems.length === 0) { %>
+      <p class="muted">No items were ordered.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>On Hand</th>
+            <th>Ordered</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% orderItems.forEach(function(oi) { %>
+            <tr>
+              <td><%= oi.name %> <span class="item-unit">/ <%= oi.unit %></span></td>
+              <td><%= oi.current_stock !== null ? oi.current_stock : '—' %></td>
+              <td><%= oi.quantity %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

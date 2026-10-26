@@ -1,0 +1,37 @@
+<%- include('partials/head', { title: "Del Re Order History — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Del Re Order History</h1>
+  <p class="subtitle">Every Del Re order placed by any shop, most recent first.</p>
+
+  <div class="card">
+    <% if (orders.length === 0) { %>
+      <p class="muted">No Del Re orders yet.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Shop</th>
+            <th>Total Items</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% orders.forEach(function(o) { %>
+            <tr>
+              <td><%= formatDate(o.created_at.slice(0, 10)) %> <span class="muted"><%= o.created_at.slice(11, 16) %></span></td>
+              <td><%= o.shop_name %></td>
+              <td><%= o.total_items || 0 %></td>
+              <td><a class="btn btn-small" href="/kitchen/delre/<%= o.id %>">View</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>
