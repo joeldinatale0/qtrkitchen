@@ -31,6 +31,12 @@ const SHOP_INTEGRATIONS = {
     squareTokenEnvVar: "SQUARE_ACCESS_TOKEN_HIGHPOINT",
     tandaLocationId: 409592,
   },
+  quartertwo: {
+    displayName: "Quarter Two",
+    squareLocationId: "L9SVGVFZHVEDA",
+    squareTokenEnvVar: "SQUARE_ACCESS_TOKEN_QUARTERTWO",
+    tandaLocationId: 409590,
+  },
 };
 
 function squareHeaders(squareTokenEnvVar) {
