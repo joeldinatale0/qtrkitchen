@@ -7,6 +7,8 @@ const SQUARE_API_BASE = "https://connect.squareup.com/v2";
 const SQUARE_VERSION = "2025-01-23";
 const TANDA_API_BASE = "https://my.tanda.co/api/v2";
 
+const { COGS_BY_SHOP } = require("./cogs-data");
+
 // Location IDs aren't secret (only the access tokens are). Unlike Tanda
 // (one org covers every shop, just different location IDs), each shop is
 // its OWN separate Square merchant account — so each shop needs its own
@@ -107,9 +109,19 @@ async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, 
   return orders;
 }
 
-function summarizeSquareOrders(orders) {
+// The same "Name (Variation)" convention used when the COGS worksheet was
+// built from the Square catalog — variation omitted when it's the item's
+// only/default one (named "Regular").
+function cogsDisplayName(li) {
+  const vname = li.variation_name;
+  return !vname || vname.toLowerCase() === "regular" ? li.name : `${li.name} (${vname})`;
+}
+
+function summarizeSquareOrders(orders, cogsMap) {
   let netSales = 0;
   let totalDiscounts = 0;
+  let totalCogs = 0;
+  let cogsMappedRevenue = 0;
   const hourly = {}; // hour -> { sales, count }
   const productStats = {}; // name -> { revenue, qty }
 
@@ -129,10 +141,24 @@ function summarizeSquareOrders(orders) {
       if (!productStats[li.name]) productStats[li.name] = { revenue: 0, qty: 0 };
       productStats[li.name].revenue += revenue;
       productStats[li.name].qty += qty;
+
+      const unitCogsCents = cogsMap[cogsDisplayName(li)];
+      if (unitCogsCents !== undefined) {
+        totalCogs += (unitCogsCents * qty) / 100;
+        cogsMappedRevenue += revenue;
+      }
     }
   }
 
-  return { netSales, totalDiscounts, transactionCount: orders.length, hourly, productStats };
+  return {
+    netSales,
+    totalDiscounts,
+    totalCogs,
+    cogsMappedRevenue,
+    transactionCount: orders.length,
+    hourly,
+    productStats,
+  };
 }
 
 async function fetchTandaDepartmentIds(tandaLocationId) {
@@ -241,8 +267,9 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     fetchTandaDepartmentIds(config.tandaLocationId),
   ]);
 
-  const today = summarizeSquareOrders(orders);
-  const lastWeek = summarizeSquareOrders(lastWeekOrders);
+  const cogsMap = COGS_BY_SHOP[shopSlug] || {};
+  const today = summarizeSquareOrders(orders, cogsMap);
+  const lastWeek = summarizeSquareOrders(lastWeekOrders, cogsMap);
 
   const shifts = await fetchTandaShifts(dateStr);
   const labour = summarizeTandaShifts(shifts, departmentIds, dateStr, isToday ? now : new Date(endUtc));
@@ -278,6 +305,13 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     .prepare("SELECT target_cents FROM shop_sales_targets WHERE shop_slug = ? AND weekday = ?")
     .get(shopSlug, weekday);
 
+  const labourPct = labourCost !== null && today.netSales ? (labourCost / today.netSales) * 100 : null;
+  const cogsPct = today.netSales ? (today.totalCogs / today.netSales) * 100 : null;
+  // % of today's revenue that came from line items we actually have a COGS
+  // figure for — the rest is unpriced/discontinued menu items, so cogsPct
+  // understates true cost by roughly that same gap.
+  const cogsCoveragePct = today.netSales ? (today.cogsMappedRevenue / today.netSales) * 100 : null;
+
   return {
     shopName,
     dateStr,
@@ -290,7 +324,11 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     lastWeekNetSales: lastWeek.netSales,
     labourHours: labour.totalHours,
     labourCost,
-    labourPct: labourCost !== null && today.netSales ? (labourCost / today.netSales) * 100 : null,
+    labourPct,
+    cogsDollars: today.totalCogs,
+    cogsPct,
+    cogsCoveragePct,
+    primeCostPct: labourPct !== null && cogsPct !== null ? labourPct + cogsPct : null,
     salesPerLabourHour: labour.totalHours ? today.netSales / labour.totalHours : null,
     transactionsPerLabourHour: labour.totalHours ? today.transactionCount / labour.totalHours : null,
     busiestHour,
@@ -355,13 +393,23 @@ function formatDailyReportEmail(report) {
     `  Most efficient trading hour: ${hourLabel(report.mostEfficientHour)}`,
     `  Least efficient staffed hour: ${hourLabel(report.leastEfficientHour)}`,
     ``,
+    `COGS (cost of goods sold — does not include labour)`,
+    `  COGS: ${money(report.cogsDollars)}`,
+    `  COGS %: ${report.cogsPct !== null ? report.cogsPct.toFixed(1) + "%" : "n/a"}`,
+    `  Priced-menu coverage: ${
+      report.cogsCoveragePct !== null ? report.cogsCoveragePct.toFixed(0) + "% of today's revenue" : "n/a"
+    } — the rest is from items without a cost on file yet, so COGS is a floor, not the full number`,
+    `  Prime cost % (labour % + COGS %): ${
+      report.primeCostPct !== null ? report.primeCostPct.toFixed(1) + "%" : "n/a"
+    }`,
+    ``,
     `TOP-GROSSING PRODUCTS`,
     ...report.topProducts.map(([name, revenue, qty]) => `  ${money(revenue)} — ${name} (${qty} sold)`),
     ``,
     `LOWEST-GROSSING PRODUCTS`,
     ...report.lowestProducts.map(([name, revenue, qty]) => `  ${money(revenue)} — ${name} (${qty} sold)`),
     ``,
-    `(COGS/prime cost, cash discrepancy, waste/remakes and sold-out products are not yet tracked — left out of this report.)`,
+    `(Cash discrepancy, waste/remakes and sold-out products are not yet tracked — left out of this report.)`,
   ];
 
   return lines.join("\n");
