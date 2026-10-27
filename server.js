@@ -950,6 +950,25 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
   }
 });
 
+// Manual correction to a day's labour hours/cost for one shop (e.g. a shift
+// logged against the wrong location) — see labour_adjustments in db.js.
+app.post("/kitchen/reports/labour-adjustment", requireAuth, requireRole("kitchen"), (req, res) => {
+  const { report_date, shop_slug, hours_delta, cost_dollars_delta, note } = req.body;
+  if (!report_date || !SHOP_INTEGRATIONS[shop_slug]) {
+    return res.status(400).json({ error: "report_date and a valid shop_slug are required" });
+  }
+  db.prepare(
+    "INSERT INTO labour_adjustments (report_date, shop_slug, hours_delta, cost_cents_delta, note) VALUES (?, ?, ?, ?, ?)"
+  ).run(
+    report_date,
+    shop_slug,
+    Number(hours_delta) || 0,
+    Math.round((Number(cost_dollars_delta) || 0) * 100),
+    note || null
+  );
+  res.json({ ok: true });
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
