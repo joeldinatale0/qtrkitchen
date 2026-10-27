@@ -113,8 +113,13 @@ async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, 
 // built from the Square catalog — variation omitted when it's the item's
 // only/default one (named "Regular").
 function cogsDisplayName(li) {
+  // Square item names sometimes carry trailing/leading whitespace (e.g. a
+  // catalog item literally named "Oats vanilla "), but cogs-data.js keys
+  // are trimmed — trim here too so a stray space never causes a silent
+  // COGS lookup miss.
+  const name = (li.name || "").trim();
   const vname = li.variation_name;
-  return !vname || vname.toLowerCase() === "regular" ? li.name : `${li.name} (${vname})`;
+  return !vname || vname.toLowerCase() === "regular" ? name : `${name} (${vname.trim()})`;
 }
 
 function summarizeSquareOrders(orders, cogsMap) {
@@ -138,9 +143,10 @@ function summarizeSquareOrders(orders, cogsMap) {
     for (const li of order.line_items || []) {
       const revenue = (li.total_money?.amount || 0) / 100;
       const qty = Number(li.quantity) || 0;
-      if (!productStats[li.name]) productStats[li.name] = { revenue: 0, qty: 0 };
-      productStats[li.name].revenue += revenue;
-      productStats[li.name].qty += qty;
+      const productName = (li.name || "").trim();
+      if (!productStats[productName]) productStats[productName] = { revenue: 0, qty: 0 };
+      productStats[productName].revenue += revenue;
+      productStats[productName].qty += qty;
 
       const unitCogsCents = cogsMap[cogsDisplayName(li)];
       if (unitCogsCents !== undefined) {
