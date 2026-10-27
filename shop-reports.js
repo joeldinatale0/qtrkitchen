@@ -13,13 +13,20 @@ const { COGS_BY_SHOP } = require("./cogs-data");
 // (one org covers every shop, just different location IDs), each shop is
 // its OWN separate Square merchant account — so each shop needs its own
 // Square access token env var, named per shop below.
+//
+// displayName is the name used in the report/email — this system is
+// intentionally independent of the `users` table (the food-ordering shop
+// accounts), since a reportable business isn't necessarily one of the 4
+// shops that order supplies from the central kitchen (e.g. Quarter Two).
 const SHOP_INTEGRATIONS = {
   essendon: {
+    displayName: "QTR Essendon",
     squareLocationId: "LJWTC3VTB52T3",
     squareTokenEnvVar: "SQUARE_ACCESS_TOKEN",
     tandaLocationId: 409591,
   },
   highpoint: {
+    displayName: "QTR Highpoint",
     squareLocationId: "LWGVFS5B0JWS2",
     squareTokenEnvVar: "SQUARE_ACCESS_TOKEN_HIGHPOINT",
     tandaLocationId: 409592,

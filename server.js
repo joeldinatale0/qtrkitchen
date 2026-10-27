@@ -250,17 +250,14 @@ async function sendDailyShopReportsIfDue() {
   if (melbourneHour() < DAILY_SHOP_REPORT_HOUR) return;
   const today = melbourneDateString();
 
-  for (const shopSlug of Object.keys(SHOP_INTEGRATIONS)) {
+  for (const [shopSlug, config] of Object.entries(SHOP_INTEGRATIONS)) {
     const already = db
       .prepare("SELECT 1 FROM daily_report_log WHERE report_date = ? AND shop_slug = ?")
       .get(today, shopSlug);
     if (already) continue;
 
-    const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shopSlug);
-    if (!shop) continue;
-
     try {
-      const report = await buildDailyShopReport(db, shopSlug, shop.name, addDays);
+      const report = await buildDailyShopReport(db, shopSlug, config.displayName, addDays);
       if (!report) continue; // missing Square/Tanda credentials
 
       const res = await fetch("https://api.resend.com/emails", {
@@ -272,7 +269,7 @@ async function sendDailyShopReportsIfDue() {
         body: JSON.stringify({
           from: "QTR Kitchen Ordering <onboarding@resend.dev>",
           to: DAILY_REPORT_EMAIL_TO,
-          subject: `Daily Report — ${shop.name} — ${today}`,
+          subject: `Daily Report — ${config.displayName} — ${today}`,
           text: formatDailyReportEmail(report),
         }),
       });
@@ -282,7 +279,7 @@ async function sendDailyShopReportsIfDue() {
         today,
         shopSlug
       );
-      console.log(`Daily shop report emailed for ${shop.name}, ${today}`);
+      console.log(`Daily shop report emailed for ${config.displayName}, ${today}`);
     } catch (err) {
       console.error(`Daily shop report failed for ${shopSlug}:`, err.message);
     }
@@ -899,10 +896,10 @@ app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req,
 // ---------- Kitchen: daily shop reports (Square + Tanda) ----------
 
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
-  const shopSlugs = Object.keys(SHOP_INTEGRATIONS);
-  const shops = shopSlugs
-    .map((slug) => db.prepare("SELECT * FROM users WHERE slug = ?").get(slug))
-    .filter(Boolean);
+  const shops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({
+    slug,
+    name: config.displayName,
+  }));
   res.render("kitchen-reports", {
     shops,
     sent: req.query.sent === "1",
@@ -913,16 +910,16 @@ app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
 
 app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (req, res) => {
   const { shop_slug, date, to } = req.body;
-  const shop = db.prepare("SELECT * FROM users WHERE slug = ?").get(shop_slug);
+  const config = SHOP_INTEGRATIONS[shop_slug];
 
-  if (!SHOP_INTEGRATIONS[shop_slug] || !shop || !process.env.RESEND_API_KEY) {
+  if (!config || !process.env.RESEND_API_KEY) {
     return res.redirect(
       `/kitchen/reports?error=1&msg=${encodeURIComponent("Shop not connected, or RESEND_API_KEY is missing")}`
     );
   }
 
   try {
-    const report = await buildDailyShopReport(db, shop_slug, shop.name, addDays, date || undefined);
+    const report = await buildDailyShopReport(db, shop_slug, config.displayName, addDays, date || undefined);
     if (!report) {
       return res.redirect(
         `/kitchen/reports?error=1&msg=${encodeURIComponent(
@@ -940,7 +937,7 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
       body: JSON.stringify({
         from: "QTR Kitchen Ordering <onboarding@resend.dev>",
         to: (to || "").trim() || DAILY_REPORT_EMAIL_TO,
-        subject: `TEST Daily Report — ${shop.name} — ${report.dateStr}`,
+        subject: `TEST Daily Report — ${config.displayName} — ${report.dateStr}`,
         text: formatDailyReportEmail(report),
       }),
     });
