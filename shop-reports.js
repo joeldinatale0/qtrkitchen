@@ -193,7 +193,11 @@ async function fetchTandaLiveLabourCost(tandaLocationId) {
   if (!res.ok) throw new Error(`Tanda live_wage_tracker failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   const actual = data.actual_staff_data || [];
-  return actual.length ? actual[actual.length - 1].costs?.total || 0 : 0;
+  // Each entry is the dollar cost accrued in its OWN 15-minute interval
+  // (it tracks headcount up/down, not a running total — confirmed by
+  // cross-checking against hours worked), so the day's total cost is the
+  // SUM of every interval, not just the most recent one.
+  return actual.reduce((sum, entry) => sum + (entry.costs?.total || 0), 0);
 }
 
 function summarizeTandaShifts(shifts, departmentIds, dateStr, now) {
