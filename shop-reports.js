@@ -294,6 +294,16 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
   const today = summarizeSquareOrders(orders, cogsMap);
   const lastWeek = summarizeSquareOrders(lastWeekOrders, cogsMap);
 
+  // Revenue that doesn't come through Square (Uber Eats, other off-platform
+  // income) but still counts toward the day's sales.
+  const salesAdjustment = db
+    .prepare(
+      "SELECT SUM(amount_cents_delta) AS cents, GROUP_CONCAT(note, ', ') AS notes FROM sales_adjustments WHERE report_date = ? AND shop_slug = ?"
+    )
+    .get(dateStr, shopSlug);
+  const otherRevenue = (salesAdjustment && salesAdjustment.cents) || 0;
+  today.netSales += otherRevenue / 100;
+
   const shifts = await fetchTandaShifts(dateStr);
   const labour = summarizeTandaShifts(shifts, departmentIds, dateStr, isToday ? now : new Date(endUtc));
   // Tanda's live wage tracker only ever reports the CURRENT day's cumulative
@@ -353,6 +363,8 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
     dateStr,
     isToday,
     netSales: today.netSales,
+    otherRevenue: otherRevenue / 100,
+    otherRevenueNote: (salesAdjustment && salesAdjustment.notes) || null,
     transactionCount: today.transactionCount,
     avgSpend: today.transactionCount ? today.netSales / today.transactionCount : 0,
     discounts: today.totalDiscounts,
@@ -410,7 +422,9 @@ function formatDailyReportEmail(report) {
       : `(labour $ cost is not shown — Tanda only provides live cost for the current day, not past dates)`,
     ``,
     `SALES`,
-    `  Total net sales: ${money(report.netSales)}`,
+    `  Total net sales: ${money(report.netSales)}${
+      report.otherRevenue ? ` (includes ${money(report.otherRevenue)} off-platform: ${report.otherRevenueNote})` : ""
+    }`,
     `  vs daily target (${money(report.targetDollars || 0)}): ${vsTarget}`,
     `  vs same day last week (${money(report.lastWeekNetSales)}): ${vsLastWeek}`,
     `  Total transactions: ${report.transactionCount}`,

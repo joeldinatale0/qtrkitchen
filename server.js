@@ -969,6 +969,19 @@ app.post("/kitchen/reports/labour-adjustment", requireAuth, requireRole("kitchen
   res.json({ ok: true });
 });
 
+// Revenue that didn't come through Square (Uber Eats, other off-platform
+// income) but should still count toward a day's total sales.
+app.post("/kitchen/reports/sales-adjustment", requireAuth, requireRole("kitchen"), (req, res) => {
+  const { report_date, shop_slug, amount_dollars_delta, note } = req.body;
+  if (!report_date || !SHOP_INTEGRATIONS[shop_slug]) {
+    return res.status(400).json({ error: "report_date and a valid shop_slug are required" });
+  }
+  db.prepare(
+    "INSERT INTO sales_adjustments (report_date, shop_slug, amount_cents_delta, note) VALUES (?, ?, ?, ?)"
+  ).run(report_date, shop_slug, Math.round((Number(amount_dollars_delta) || 0) * 100), note || null);
+  res.json({ ok: true });
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {

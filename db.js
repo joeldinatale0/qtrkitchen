@@ -142,6 +142,19 @@ db.exec(`
     note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- Revenue that didn't come through Square (Uber Eats, other off-platform
+  -- income) but should still count toward a day's total sales. Always
+  -- added on top of Square's net sales — a negative delta isn't meaningful
+  -- here, unlike labour_adjustments.
+  CREATE TABLE IF NOT EXISTS sales_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    shop_slug TEXT NOT NULL,
+    amount_cents_delta INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Idempotent migrations for columns added after initial release — safe to
