@@ -299,7 +299,20 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
   // Tanda's live wage tracker only ever reports the CURRENT day's cumulative
   // cost — it cannot be queried for a past date, so for any date other than
   // today the $ labour cost is genuinely unavailable (not faked as $0).
-  const labourCost = isToday ? await fetchTandaLiveLabourCost(config.tandaLocationId) : null;
+  let labourCost = isToday ? await fetchTandaLiveLabourCost(config.tandaLocationId) : null;
+
+  // Manual corrections (e.g. a shift logged against the wrong location).
+  const adjustment = db
+    .prepare(
+      "SELECT SUM(hours_delta) AS hours, SUM(cost_cents_delta) AS cost_cents FROM labour_adjustments WHERE report_date = ? AND shop_slug = ?"
+    )
+    .get(dateStr, shopSlug);
+  if (adjustment && adjustment.hours) {
+    labour.totalHours += adjustment.hours;
+  }
+  if (adjustment && adjustment.cost_cents && labourCost !== null) {
+    labourCost += adjustment.cost_cents / 100;
+  }
 
   let busiestHour = null;
   for (const [h, v] of Object.entries(today.hourly)) {

@@ -127,6 +127,21 @@ db.exec(`
     sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(report_date, shop_slug)
   );
+
+  -- Manual corrections to a day's labour hours/cost for one shop, applied on
+  -- top of whatever Tanda reports — for cases like a shift logged against
+  -- the wrong location. hours_delta/cost_cents_delta can be negative
+  -- (removing) or positive (adding); a single staff reallocation between
+  -- shops is two rows, one of each sign.
+  CREATE TABLE IF NOT EXISTS labour_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    shop_slug TEXT NOT NULL,
+    hours_delta REAL NOT NULL,
+    cost_cents_delta INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Idempotent migrations for columns added after initial release — safe to
