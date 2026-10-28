@@ -354,36 +354,6 @@ async function sendCookieBakeListIfDue() {
   }
 }
 
-// Manual test send — ignores the 4pm gate and the once-a-day dedup log, so
-// it's safe to trigger any time without affecting the real scheduled send.
-app.post("/kitchen/reports/cookie-bake/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
-  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
-  try {
-    const bakeDate = (req.body && req.body.bake_date) || tomorrow();
-    const email = buildCookieBakeEmail(bakeDate);
-    if (!email) return res.status(400).json({ error: "No bake target for that date's weekday" });
-
-    const to = (req.body && req.body.to) || EMAIL_TO;
-    const emailRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to,
-        subject: email.subject,
-        text: email.text,
-      }),
-    });
-    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
-    res.json({ ok: true, to, subject: email.subject, text: email.text });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
@@ -1089,6 +1059,37 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
     const weeks = Number(req.query.weeks) || 8;
     const results = await buildCookieSalesReport(weeks);
     res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual test send for the 4pm cookie baking list — ignores the hour gate
+// and the once-a-day dedup log, so it's safe to trigger any time without
+// affecting the real scheduled send.
+app.post("/kitchen/reports/cookie-bake/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
+  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
+  try {
+    const bakeDate = (req.body && req.body.bake_date) || tomorrow();
+    const email = buildCookieBakeEmail(bakeDate);
+    if (!email) return res.status(400).json({ error: "No bake target for that date's weekday" });
+
+    const to = (req.body && req.body.to) || EMAIL_TO;
+    const emailRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to,
+        subject: email.subject,
+        text: email.text,
+      }),
+    });
+    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
+    res.json({ ok: true, to, subject: email.subject, text: email.text });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
