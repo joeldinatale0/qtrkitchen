@@ -286,12 +286,73 @@ async function sendDailyShopReportsIfDue() {
   }
 }
 
+const COOKIE_BAKE_HOUR = 16; // 4:00 PM Melbourne time — baking for tomorrow morning
+
+// One combined cookie-baking total (not split by shop) for the central
+// kitchen, sent once daily. Quarter Two isn't included — it bakes its own;
+// this covers the 3 shops that get next-day-delivered baked goods
+// (Essendon, Highpoint, and QTR Moonee Ponds, which isn't its own connected
+// shop yet so it borrows Highpoint's figures — see cookie_bake_targets).
+async function sendCookieBakeListIfDue() {
+  if (!process.env.RESEND_API_KEY) return;
+  if (melbourneHour() < COOKIE_BAKE_HOUR) return;
+  const today = melbourneDateString();
+
+  const already = db.prepare("SELECT 1 FROM cookie_bake_log WHERE report_date = ?").get(today);
+  if (already) return;
+
+  try {
+    const bakeDate = tomorrow();
+    const weekday = new Date(bakeDate + "T00:00:00").getDay();
+    const target = db
+      .prepare("SELECT chocchip_qty, mnm_qty FROM cookie_bake_targets WHERE weekday = ?")
+      .get(weekday);
+    if (!target) return;
+
+    const weekdayName = new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Melbourne",
+      weekday: "long",
+    }).format(new Date(bakeDate + "T12:00:00Z"));
+
+    const text = [
+      `Cookie baking list — for ${weekdayName} ${bakeDate} morning`,
+      ``,
+      `  ${target.chocchip_qty} x Choc Chip`,
+      `  ${target.mnm_qty} x M&M`,
+      ``,
+      `Combined total for Essendon, Highpoint and QTR Moonee Ponds — no store breakdown needed.`,
+    ].join("\n");
+
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to: EMAIL_TO,
+        subject: `Cookie baking list — ${weekdayName} ${bakeDate}`,
+        text,
+      }),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+    db.prepare("INSERT INTO cookie_bake_log (report_date) VALUES (?)").run(today);
+    console.log(`Cookie baking list emailed for ${bakeDate}`);
+  } catch (err) {
+    console.error("Cookie baking list failed:", err.message);
+  }
+}
+
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
+setInterval(sendCookieBakeListIfDue, 1000 * 60 * 60);
 sendDailyBackupIfDue();
 sendWeeklySummaryIfDue();
 sendDailyShopReportsIfDue();
+sendCookieBakeListIfDue();
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));

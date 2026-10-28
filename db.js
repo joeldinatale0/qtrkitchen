@@ -155,7 +155,42 @@ db.exec(`
     note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- Total cookies (choc chip / M&M) the central kitchen needs to bake for
+  -- the next morning, by the weekday being baked FOR (0 = Sunday .. 6 =
+  -- Saturday). This is one combined total across Essendon, Highpoint and
+  -- QTR Moonee Ponds (not broken out by shop) — seeded from an 8-week
+  -- average of real Square sales, each shop's figure bumped up for Uber
+  -- Eats orders (which don't appear in Square), since Moonee Ponds isn't
+  -- its own connected shop yet, it's seeded as a copy of Highpoint's.
+  CREATE TABLE IF NOT EXISTS cookie_bake_targets (
+    weekday INTEGER PRIMARY KEY,
+    chocchip_qty INTEGER NOT NULL,
+    mnm_qty INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS cookie_bake_log (
+    report_date TEXT NOT NULL UNIQUE,
+    sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+// Seed cookie_bake_targets once (editable later — never overwrite existing rows).
+const COOKIE_BAKE_SEED = {
+  1: { chocchip: 28, mnm: 20 }, // Monday
+  2: { chocchip: 28, mnm: 22 }, // Tuesday
+  3: { chocchip: 30, mnm: 22 }, // Wednesday
+  4: { chocchip: 39, mnm: 28 }, // Thursday
+  5: { chocchip: 32, mnm: 30 }, // Friday
+  6: { chocchip: 35, mnm: 32 }, // Saturday
+  0: { chocchip: 38, mnm: 32 }, // Sunday
+};
+const insertBakeTarget = db.prepare(
+  "INSERT OR IGNORE INTO cookie_bake_targets (weekday, chocchip_qty, mnm_qty) VALUES (?, ?, ?)"
+);
+for (const [weekday, qty] of Object.entries(COOKIE_BAKE_SEED)) {
+  insertBakeTarget.run(Number(weekday), qty.chocchip, qty.mnm);
+}
 
 // Idempotent migrations for columns added after initial release — safe to
 // run on every boot, including against the existing production database.
