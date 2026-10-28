@@ -293,6 +293,32 @@ const COOKIE_BAKE_HOUR = 16; // 4:00 PM Melbourne time — baking for tomorrow m
 // this covers the 3 shops that get next-day-delivered baked goods
 // (Essendon, Highpoint, and QTR Moonee Ponds, which isn't its own connected
 // shop yet so it borrows Highpoint's figures — see cookie_bake_targets).
+// bakeDate: the morning being baked for (tomorrow, for the real scheduled
+// send; any date for a manual test send).
+function buildCookieBakeEmail(bakeDate) {
+  const weekday = new Date(bakeDate + "T00:00:00").getDay();
+  const target = db
+    .prepare("SELECT chocchip_qty, mnm_qty FROM cookie_bake_targets WHERE weekday = ?")
+    .get(weekday);
+  if (!target) return null;
+
+  const weekdayName = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    weekday: "long",
+  }).format(new Date(bakeDate + "T12:00:00Z"));
+
+  const text = [
+    `Cookie baking list — for ${weekdayName} ${bakeDate} morning`,
+    ``,
+    `  ${target.chocchip_qty} x Choc Chip`,
+    `  ${target.mnm_qty} x M&M`,
+    ``,
+    `Combined total for Essendon, Highpoint and QTR Moonee Ponds — no store breakdown needed.`,
+  ].join("\n");
+
+  return { subject: `Cookie baking list — ${weekdayName} ${bakeDate}`, text };
+}
+
 async function sendCookieBakeListIfDue() {
   if (!process.env.RESEND_API_KEY) return;
   if (melbourneHour() < COOKIE_BAKE_HOUR) return;
@@ -303,25 +329,8 @@ async function sendCookieBakeListIfDue() {
 
   try {
     const bakeDate = tomorrow();
-    const weekday = new Date(bakeDate + "T00:00:00").getDay();
-    const target = db
-      .prepare("SELECT chocchip_qty, mnm_qty FROM cookie_bake_targets WHERE weekday = ?")
-      .get(weekday);
-    if (!target) return;
-
-    const weekdayName = new Intl.DateTimeFormat("en-AU", {
-      timeZone: "Australia/Melbourne",
-      weekday: "long",
-    }).format(new Date(bakeDate + "T12:00:00Z"));
-
-    const text = [
-      `Cookie baking list — for ${weekdayName} ${bakeDate} morning`,
-      ``,
-      `  ${target.chocchip_qty} x Choc Chip`,
-      `  ${target.mnm_qty} x M&M`,
-      ``,
-      `Combined total for Essendon, Highpoint and QTR Moonee Ponds — no store breakdown needed.`,
-    ].join("\n");
+    const email = buildCookieBakeEmail(bakeDate);
+    if (!email) return;
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -332,8 +341,8 @@ async function sendCookieBakeListIfDue() {
       body: JSON.stringify({
         from: "QTR Kitchen Ordering <onboarding@resend.dev>",
         to: EMAIL_TO,
-        subject: `Cookie baking list — ${weekdayName} ${bakeDate}`,
-        text,
+        subject: email.subject,
+        text: email.text,
       }),
     });
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
@@ -344,6 +353,36 @@ async function sendCookieBakeListIfDue() {
     console.error("Cookie baking list failed:", err.message);
   }
 }
+
+// Manual test send — ignores the 4pm gate and the once-a-day dedup log, so
+// it's safe to trigger any time without affecting the real scheduled send.
+app.post("/kitchen/reports/cookie-bake/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
+  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
+  try {
+    const bakeDate = (req.body && req.body.bake_date) || tomorrow();
+    const email = buildCookieBakeEmail(bakeDate);
+    if (!email) return res.status(400).json({ error: "No bake target for that date's weekday" });
+
+    const to = (req.body && req.body.to) || EMAIL_TO;
+    const emailRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to,
+        subject: email.subject,
+        text: email.text,
+      }),
+    });
+    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
+    res.json({ ok: true, to, subject: email.subject, text: email.text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
