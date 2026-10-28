@@ -387,6 +387,81 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
   };
 }
 
+// Cookie flavour is the "Cookie" item's variation_name — Square catalog
+// naming for it isn't consistent between shops ("M&M" vs "MnM", "Choc chip"
+// vs "choc chip"), so normalize before matching.
+function normalizeCookieFlavour(itemName, variationName) {
+  const name = (itemName || "").trim().toLowerCase();
+  if (name !== "cookie" && name !== "cookies") return null;
+  const v = (variationName || "").trim().toLowerCase().replace(/[^a-z]/g, "");
+  if (v.includes("mnm") || v === "mm" || v.includes("mandm")) return "mnm";
+  if (v.includes("chocchip")) return "chocchip";
+  return null;
+}
+
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Average daily quantity sold of each cookie flavour, Sun-Sat, over the
+// last `weeks` fully-completed weeks (default 8), per connected shop.
+async function buildCookieSalesReport(weeks = 8) {
+  const actualTodayStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  function addDaysLocal(isoDate, days) {
+    const [y, m, d] = isoDate.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  }
+
+  const endDateStr = addDaysLocal(actualTodayStr, -1); // last fully-completed trading day
+  const startDateStr = addDaysLocal(endDateStr, -(weeks * 7 - 1));
+  const { startUtc } = melbourneDayRangeUtc(startDateStr);
+  const { endUtc } = melbourneDayRangeUtc(endDateStr);
+
+  const results = {};
+  for (const [slug, config] of Object.entries(SHOP_INTEGRATIONS)) {
+    if (!process.env[config.squareTokenEnvVar]) {
+      results[slug] = { shopName: config.displayName, error: "Square not connected" };
+      continue;
+    }
+    const orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
+
+    const byWeekday = Array.from({ length: 7 }, () => ({ mnm: 0, chocchip: 0 }));
+    const occurrences = Array(7).fill(0);
+    const seenDates = new Set();
+
+    for (const order of orders) {
+      const dateStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Australia/Melbourne",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(order.created_at));
+      seenDates.add(dateStr);
+      const weekday = new Date(dateStr + "T00:00:00Z").getUTCDay();
+      for (const li of order.line_items || []) {
+        const flavour = normalizeCookieFlavour(li.name, li.variation_name);
+        if (flavour) byWeekday[weekday][flavour] += Number(li.quantity) || 0;
+      }
+    }
+    for (const d of seenDates) occurrences[new Date(d + "T00:00:00Z").getUTCDay()] += 1;
+
+    const perDay = WEEKDAY_NAMES.map((name, w) => ({
+      day: name,
+      mnmAvg: occurrences[w] ? byWeekday[w].mnm / occurrences[w] : 0,
+      chocchipAvg: occurrences[w] ? byWeekday[w].chocchip / occurrences[w] : 0,
+    }));
+
+    results[slug] = { shopName: config.displayName, range: `${startDateStr} to ${endDateStr}`, perDay };
+  }
+  return results;
+}
+
 function money(n) {
   return `$${n.toFixed(2)}`;
 }
@@ -465,4 +540,4 @@ function formatDailyReportEmail(report) {
   return lines.join("\n");
 }
 
-module.exports = { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail };
+module.exports = { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport };

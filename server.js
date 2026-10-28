@@ -8,7 +8,7 @@ const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const db = require("./db");
 const { buildWeeklySummaryPdf } = require("./invoice-pdf");
-const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail } = require("./shop-reports");
+const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport } = require("./shop-reports");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -980,6 +980,18 @@ app.post("/kitchen/reports/sales-adjustment", requireAuth, requireRole("kitchen"
     "INSERT INTO sales_adjustments (report_date, shop_slug, amount_cents_delta, note) VALUES (?, ?, ?, ?)"
   ).run(report_date, shop_slug, Math.round((Number(amount_dollars_delta) || 0) * 100), note || null);
   res.json({ ok: true });
+});
+
+// Average daily cookie flavour sales (Sun-Sat) across the last N weeks,
+// per shop — ad hoc analytics route, JSON only (no view).
+app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), async (req, res) => {
+  try {
+    const weeks = Number(req.query.weeks) || 8;
+    const results = await buildCookieSalesReport(weeks);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Kitchen: manage par levels per shop ----------
