@@ -386,6 +386,172 @@ table td {
   flex-wrap: wrap;
 }
 
+/* ---------- EOD Cash Sheet (QTR brand: burgundy / baby blue / cream) ---------- */
+
+:root {
+  --qtr-burgundy: #6b1f2e;
+  --qtr-baby-blue: #c6d7e8;
+  --qtr-cream: #f4efe6;
+}
+
+.eod-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 40px 32px 96px;
+}
+
+.eod-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 36px 40px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.eod-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.eod-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eod-logo .mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--qtr-burgundy);
+  clip-path: polygon(50% 50%, 50% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, 50% 0%);
+}
+
+.eod-logo .wordmark {
+  font-weight: 800;
+  color: var(--qtr-burgundy);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  font-size: 15px;
+  text-transform: uppercase;
+}
+
+.eod-pill {
+  display: inline-block;
+  background: var(--qtr-baby-blue);
+  color: var(--qtr-burgundy);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 18px;
+  border-radius: 999px;
+}
+
+.eod-title {
+  font-size: 30px;
+  font-weight: 800;
+  color: var(--qtr-burgundy);
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  border-bottom: 3px solid var(--qtr-burgundy);
+  padding-bottom: 14px;
+  margin: 0 0 28px;
+}
+
+.eod-meta {
+  display: flex;
+  gap: 40px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.eod-meta label {
+  color: var(--qtr-burgundy);
+  opacity: 0.85;
+}
+
+.eod-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.eod-table th {
+  background: var(--qtr-burgundy);
+  color: #fff;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.eod-table th:first-child {
+  border-top-left-radius: 8px;
+}
+
+.eod-table th:last-child {
+  border-top-right-radius: 8px;
+}
+
+.eod-table td {
+  padding: 14px 10px;
+  text-align: center;
+  border-bottom: 1px solid var(--qtr-baby-blue);
+}
+
+.eod-table tbody tr:nth-child(odd) {
+  background: var(--qtr-cream);
+}
+
+.eod-table input[type="number"] {
+  width: 100%;
+  min-width: 90px;
+  text-align: right;
+  border: 1px solid var(--qtr-baby-blue);
+}
+
+.eod-computed {
+  font-weight: 700;
+  color: var(--qtr-burgundy);
+}
+
+.eod-discrepancy.short {
+  color: #8a2e2e;
+}
+
+.eod-discrepancy.over {
+  color: #2f6b4f;
+}
+
+.eod-discrepancy.even {
+  color: var(--qtr-burgundy);
+  opacity: 0.6;
+}
+
+.eod-saved-banner {
+  background: var(--qtr-baby-blue);
+  color: var(--qtr-burgundy);
+  border-radius: 6px;
+  padding: 12px 18px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.btn-eod {
+  background: var(--qtr-burgundy);
+  border-color: var(--qtr-burgundy);
+  color: #fff;
+}
+
+.btn-eod:hover {
+  background: #561827;
+  opacity: 1;
+}
+
 @media print {
   .topbar,
   .no-print {

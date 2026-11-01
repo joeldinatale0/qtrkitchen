@@ -552,6 +552,81 @@ app.get("/order/select-date", requireAuth, requireRole("shop"), (req, res) => {
   });
 });
 
+// ---------- Shop: EOD cash sheet ----------
+
+app.get("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
+  const reportDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "") ? req.query.date : melbourneDateString();
+  const shopSlug = req.session.user.slug;
+
+  const existing = db
+    .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?")
+    .get(shopSlug, reportDate);
+  const floatSetting = db.prepare("SELECT float_cents FROM shop_float_settings WHERE shop_slug = ?").get(shopSlug);
+  const floatCents = floatSetting ? floatSetting.float_cents : 50000;
+
+  const recent = db
+    .prepare(
+      "SELECT * FROM eod_cash_sheets WHERE shop_slug = ? ORDER BY report_date DESC LIMIT 14"
+    )
+    .all(shopSlug);
+
+  res.render("eod-cash", {
+    reportDate,
+    today: melbourneDateString(),
+    floatCents,
+    existing,
+    recent,
+    saved: req.query.saved === "1",
+  });
+});
+
+app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
+  const shopSlug = req.session.user.slug;
+  const reportDate = req.body.report_date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate || "")) return res.redirect("/eod-cash");
+
+  const toCents = (v) => Math.round((Number(v) || 0) * 100);
+  const tillAmountCents = toCents(req.body.till_amount);
+  const eftposSalesCents = toCents(req.body.eftpos_sales);
+  const uberSalesCents = toCents(req.body.uber_sales);
+  const cashSalesCents = toCents(req.body.cash_sales);
+
+  const floatSetting = db.prepare("SELECT float_cents FROM shop_float_settings WHERE shop_slug = ?").get(shopSlug);
+  const floatCents = floatSetting ? floatSetting.float_cents : 50000;
+
+  const cashAmountCents = tillAmountCents - floatCents;
+  const discrepancyCents = cashAmountCents - cashSalesCents;
+
+  db.prepare(
+    `INSERT INTO eod_cash_sheets
+       (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, submitted_by, submitted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(shop_slug, report_date) DO UPDATE SET
+       till_amount_cents = excluded.till_amount_cents,
+       eftpos_sales_cents = excluded.eftpos_sales_cents,
+       uber_sales_cents = excluded.uber_sales_cents,
+       cash_sales_cents = excluded.cash_sales_cents,
+       float_cents = excluded.float_cents,
+       cash_amount_cents = excluded.cash_amount_cents,
+       discrepancy_cents = excluded.discrepancy_cents,
+       submitted_by = excluded.submitted_by,
+       submitted_at = CURRENT_TIMESTAMP`
+  ).run(
+    shopSlug,
+    reportDate,
+    tillAmountCents,
+    eftposSalesCents,
+    uberSalesCents,
+    cashSalesCents,
+    floatCents,
+    cashAmountCents,
+    discrepancyCents,
+    req.session.user.name
+  );
+
+  res.redirect(`/eod-cash?date=${reportDate}&saved=1`);
+});
+
 app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
   const deliveryDate = req.query.date;
   if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
@@ -1093,6 +1168,40 @@ app.post("/kitchen/reports/cookie-bake/send-test", requireAuth, requireRole("kit
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------- Kitchen: EOD cash sheets ----------
+
+app.get("/kitchen/eod-cash", requireAuth, requireRole("kitchen"), (req, res) => {
+  const reportDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "") ? req.query.date : melbourneDateString();
+
+  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
+  const sheetsByShop = {};
+  for (const shop of shops) {
+    sheetsByShop[shop.slug] = db
+      .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?")
+      .get(shop.slug, reportDate);
+  }
+
+  const floats = db.prepare("SELECT * FROM shop_float_settings").all();
+  const floatByShop = {};
+  for (const f of floats) floatByShop[f.shop_slug] = f.float_cents;
+
+  res.render("kitchen-eod-cash", {
+    reportDate,
+    today: melbourneDateString(),
+    shops,
+    sheetsByShop,
+    floatByShop,
+  });
+});
+
+app.post("/kitchen/eod-cash/float/:shopSlug", requireAuth, requireRole("kitchen"), (req, res) => {
+  const floatCents = Math.round((Number(req.body.float_amount) || 0) * 100);
+  db.prepare(
+    "INSERT INTO shop_float_settings (shop_slug, float_cents) VALUES (?, ?) ON CONFLICT(shop_slug) DO UPDATE SET float_cents = excluded.float_cents"
+  ).run(req.params.shopSlug, floatCents);
+  res.redirect(`/kitchen/eod-cash?date=${req.body.report_date || melbourneDateString()}`);
 });
 
 // ---------- Kitchen: manage par levels per shop ----------

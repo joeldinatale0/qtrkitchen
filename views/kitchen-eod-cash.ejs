@@ -1,0 +1,76 @@
+<%- include('partials/head', { title: "EOD Cash Sheets — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="eod-page">
+  <div class="eod-card">
+    <div class="eod-head">
+      <div class="eod-logo">
+        <div class="mark"></div>
+        <div class="wordmark">Coffee<br>QTR</div>
+      </div>
+      <span class="eod-pill">All Stores</span>
+    </div>
+
+    <h1 class="eod-title">EOD Cash Sheets</h1>
+
+    <form method="GET" action="/kitchen/eod-cash" class="eod-meta">
+      <div>
+        <label for="date">Date</label>
+        <input type="date" id="date" name="date" value="<%= reportDate %>" max="<%= today %>" onchange="this.form.submit()" />
+      </div>
+    </form>
+
+    <table class="eod-table">
+      <thead>
+        <tr>
+          <th>Store</th>
+          <th>Till Amount</th>
+          <th>EFTPOS</th>
+          <th>Uber</th>
+          <th>Cash Sales</th>
+          <th>Cash Amount</th>
+          <th>Discrepancy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% shops.forEach(function(shop) {
+          const s = sheetsByShop[shop.slug];
+        %>
+          <tr>
+            <td style="text-align: left; font-weight: 700;"><%= shop.name %></td>
+            <% if (s) { %>
+              <td>$<%= (s.till_amount_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.eftpos_sales_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.uber_sales_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.cash_sales_cents / 100).toFixed(2) %></td>
+              <td class="eod-computed">$<%= (s.cash_amount_cents / 100).toFixed(2) %></td>
+              <td class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
+                $<%= (s.discrepancy_cents / 100).toFixed(2) %>
+              </td>
+            <% } else { %>
+              <td colspan="6" class="muted">Not submitted yet</td>
+            <% } %>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 style="margin-top: 40px;">Store Floats</h2>
+  <p class="subtitle">The starting till amount subtracted from each day's count to get Cash Amount. Defaulted to $500 — update per store if different.</p>
+  <div class="card">
+    <% shops.forEach(function(shop) { %>
+      <div class="item-row">
+        <span class="item-name"><%= shop.name %></span>
+        <form method="POST" action="/kitchen/eod-cash/float/<%= shop.slug %>" class="inline-form" style="display: flex; gap: 8px; align-items: center;">
+          <input type="hidden" name="report_date" value="<%= reportDate %>" />
+          $ <input type="number" step="0.01" name="float_amount" value="<%= ((floatByShop[shop.slug] || 50000) / 100).toFixed(2) %>" style="width: 90px;" />
+          <button class="btn btn-small" type="submit">Save</button>
+        </form>
+      </div>
+    <% }) %>
+  </div>
+</div>
+
+</body>
+</html>

@@ -173,7 +173,44 @@ db.exec(`
     report_date TEXT NOT NULL UNIQUE,
     sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- Each shop's starting till float — the amount already in the till before
+  -- the day's trading, which gets subtracted back out of the counted till
+  -- total to arrive at that day's cash takings. Kitchen-editable, not
+  -- something shop staff enter themselves.
+  CREATE TABLE IF NOT EXISTS shop_float_settings (
+    shop_slug TEXT PRIMARY KEY,
+    float_cents INTEGER NOT NULL
+  );
+
+  -- One EOD cash reconciliation per shop per day. cash_amount_cents and
+  -- discrepancy_cents are computed at submit time (not re-derived later),
+  -- so a sheet still reads correctly even if the shop's float setting
+  -- changes afterward.
+  CREATE TABLE IF NOT EXISTS eod_cash_sheets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_slug TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    till_amount_cents INTEGER NOT NULL,
+    eftpos_sales_cents INTEGER NOT NULL,
+    uber_sales_cents INTEGER NOT NULL,
+    cash_sales_cents INTEGER NOT NULL,
+    float_cents INTEGER NOT NULL,
+    cash_amount_cents INTEGER NOT NULL,
+    discrepancy_cents INTEGER NOT NULL,
+    submitted_by TEXT,
+    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(shop_slug, report_date)
+  );
 `);
+
+// Seed each shop with a default $500 float — kitchen can edit per shop from
+// the EOD Cash Sheets admin page if a store's actual float differs.
+const FLOAT_SEED_SHOPS = ["essendon", "highpoint", "mooneeponds", "melbournecentral"];
+const insertFloat = db.prepare(
+  "INSERT OR IGNORE INTO shop_float_settings (shop_slug, float_cents) VALUES (?, 50000)"
+);
+for (const slug of FLOAT_SEED_SHOPS) insertFloat.run(slug);
 
 // Seed cookie_bake_targets once (editable later — never overwrite existing rows).
 const COOKIE_BAKE_SEED = {
