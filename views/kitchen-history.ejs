@@ -39,7 +39,7 @@
               <td><%= d.total_items %></td>
               <td><%= d.prepared_count %> / <%= d.shop_count %></td>
               <td><% if (d.late_count > 0) { %><span class="tag-late"><%= d.late_count %> late</span><% } else { %>—<% } %></td>
-              <td><a class="btn btn-small" href="/kitchen?date=<%= d.delivery_date %>">View</a></td>
+              <td><a class="btn btn-small" href="/kitchen/today?date=<%= d.delivery_date %>">View</a></td>
             </tr>
           <% }) %>
         </tbody>

@@ -1,0 +1,62 @@
+<%- include('partials/head', { title: shop.name + " EOD Cash — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="eod-page">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+
+  <div class="eod-card">
+    <div class="eod-head">
+      <div class="eod-logo">
+        <div class="mark"></div>
+        <div class="wordmark">Coffee<br>QTR</div>
+      </div>
+      <span class="eod-pill"><%= shop.name %></span>
+    </div>
+
+    <h1 class="eod-title">EOD Cash Sheets</h1>
+
+    <% if (sheets.length === 0) { %>
+      <p class="muted">No cash sheets submitted yet.</p>
+    <% } else { %>
+      <table class="eod-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Till Amount</th>
+            <th>EFTPOS</th>
+            <th>Uber</th>
+            <th>Cash Sales</th>
+            <th>Cash Amount</th>
+            <th>Discrepancy</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% sheets.forEach(function(s) { %>
+            <tr>
+              <td><%= formatDate(s.report_date) %></td>
+              <td>$<%= (s.till_amount_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.eftpos_sales_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.uber_sales_cents / 100).toFixed(2) %></td>
+              <td>$<%= (s.cash_sales_cents / 100).toFixed(2) %></td>
+              <td class="eod-computed">$<%= (s.cash_amount_cents / 100).toFixed(2) %></td>
+              <td class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
+                $<%= (s.discrepancy_cents / 100).toFixed(2) %>
+              </td>
+              <td>
+                <form method="POST" action="/kitchen/eod-cash/delete/<%= shop.slug %>" class="inline-form"
+                      onsubmit="return confirm('Delete this cash sheet?');">
+                  <input type="hidden" name="report_date" value="<%= s.report_date %>" />
+                  <button class="btn btn-small" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

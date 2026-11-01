@@ -5,7 +5,7 @@
   <h1>Orders for <%= formatDate(deliveryDate) %></h1>
   <p class="subtitle">All shop orders due for delivery on this date.</p>
 
-  <form class="toolbar no-print" method="GET" action="/kitchen">
+  <form class="toolbar no-print" method="GET" action="/kitchen/today">
     <label style="margin-bottom:0;">Delivery date</label>
     <input type="date" name="date" value="<%= deliveryDate %>" onchange="this.form.submit()" />
   </form>

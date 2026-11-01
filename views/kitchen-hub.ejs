@@ -1,0 +1,59 @@
+<%- include('partials/head', { title: "Admin — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container" style="padding-top: 64px;">
+  <div style="text-align: center; margin-bottom: 48px;">
+    <h1 style="margin-bottom: 4px;">Admin</h1>
+    <p class="subtitle" style="margin-bottom: 0;">Pick a shop to see its orders, EOD cash sheets and reports.</p>
+  </div>
+
+  <div class="store-grid">
+    <% shops.forEach(function(shop) { %>
+      <a class="store-tile" href="/kitchen/shop/<%= shop.slug %>"><%= shop.name %></a>
+    <% }) %>
+  </div>
+
+  <h2 style="margin-top: 48px;">Everything Else</h2>
+  <div class="card">
+    <div class="item-row">
+      <span class="item-name">Today&#8217;s Combined Prep List</span>
+      <a class="btn btn-small" href="/kitchen/today">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Order History (all shops)</span>
+      <a class="btn btn-small" href="/kitchen/history">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">EOD Cash Sheets (all shops, by date)</span>
+      <a class="btn btn-small" href="/kitchen/eod-cash">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Manage Items</span>
+      <a class="btn btn-small" href="/kitchen/items">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Par Levels</span>
+      <a class="btn btn-small" href="/kitchen/pars">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Del Re Orders (Essendon)</span>
+      <a class="btn btn-small" href="/kitchen/delre">Open</a>
+    </div>
+  </div>
+
+  <% if (reportingShops.length > 0) { %>
+    <h2 style="margin-top: 40px;">Sales &amp; Labour Reports</h2>
+    <p class="subtitle">Businesses connected to Square/Tanda — not all of these are food-ordering shops.</p>
+    <div class="card">
+      <% reportingShops.forEach(function(rs) { %>
+        <div class="item-row">
+          <span class="item-name"><%= rs.name %></span>
+          <a class="btn btn-small" href="/kitchen/reports">Open</a>
+        </div>
+      <% }) %>
+    </div>
+  <% } %>
+</div>
+
+</body>
+</html>

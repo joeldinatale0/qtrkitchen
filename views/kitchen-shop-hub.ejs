@@ -1,0 +1,34 @@
+<%- include('partials/head', { title: shop.name + " — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen">&larr; All shops</a></p>
+  <h1><%= shop.name %></h1>
+  <p class="subtitle">Orders, EOD cash sheets<% if (hasReports) { %> and sales reports<% } %> for this shop.</p>
+
+  <div class="card">
+    <div class="item-row">
+      <span class="item-name">EOD Cash Sheets</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/eod-cash">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Food Order History</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/orders">Open</a>
+    </div>
+    <% if (hasReports) { %>
+      <div class="item-row">
+        <span class="item-name">Daily Sales &amp; Labour Report</span>
+        <a class="btn btn-small" href="/kitchen/reports">Open</a>
+      </div>
+    <% } %>
+    <% if (shop.slug === 'essendon') { %>
+      <div class="item-row">
+        <span class="item-name">Del Re Orders</span>
+        <a class="btn btn-small" href="/kitchen/delre">Open</a>
+      </div>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

@@ -829,7 +829,68 @@ app.get("/delre/order/complete", requireAuth, requireRole("shop"), requireShopSl
 
 // ---------- Kitchen: dashboard ----------
 
+// Admin hub: pick a shop to drill into, or jump to today's combined prep list.
 app.get("/kitchen", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shops = db
+    .prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name")
+    .all();
+  const reportingShops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({
+    slug,
+    name: config.displayName,
+  }));
+  res.render("kitchen-hub", { shops, reportingShops });
+});
+
+app.get("/kitchen/shop/:slug", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+  res.render("kitchen-shop-hub", { shop, hasReports: Boolean(SHOP_INTEGRATIONS[shop.slug]) });
+});
+
+app.get("/kitchen/shop/:slug/orders", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+
+  const dates = db
+    .prepare(
+      `SELECT o.delivery_date, o.status, o.is_late,
+              SUM(CASE WHEN oi.item_id IS NOT NULL THEN oi.quantity ELSE 0 END) AS total_items
+       FROM orders o
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.shop_id = ?
+       GROUP BY o.id
+       ORDER BY o.delivery_date DESC`
+    )
+    .all(shop.id);
+
+  let selected = null;
+  if (req.query.date) {
+    const order = db
+      .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+      .get(shop.id, req.query.date);
+    if (order) {
+      const items = db.prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id").all(order.id);
+      selected = { order, items };
+    }
+  }
+
+  res.render("kitchen-shop-orders", { shop, dates, selected, selectedDate: req.query.date || null });
+});
+
+app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+
+  const sheets = db
+    .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? ORDER BY report_date DESC")
+    .all(shop.slug);
+
+  res.render("kitchen-shop-eod-cash", { shop, sheets });
+});
+
+// Today's (or any date's) combined prep list across all shops — the
+// kitchen's actual baking/packing list. Formerly lived at bare /kitchen.
+app.get("/kitchen/today", requireAuth, requireRole("kitchen"), (req, res) => {
   const deliveryDate = req.query.date || tomorrow();
 
   const shops = db

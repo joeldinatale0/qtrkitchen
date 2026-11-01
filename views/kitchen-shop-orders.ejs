@@ -1,0 +1,59 @@
+<%- include('partials/head', { title: shop.name + " Orders — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+  <h1><%= shop.name %> — Food Orders</h1>
+  <p class="subtitle">Every delivery date this shop has ordered, most recent first.</p>
+
+  <% if (selected) { %>
+    <h2>Order for <%= formatDate(selectedDate) %></h2>
+    <div class="card">
+      <p class="muted" style="margin-top: 0;">
+        Status: <%= selected.order.status %>
+        <% if (selected.order.is_late) { %><span class="tag-late">Late order</span><% } %>
+      </p>
+      <% selected.items.filter(i => i.item_id).forEach(function(oi) { %>
+        <div class="item-row">
+          <span class="item-name"><%= oi.name %> <span class="item-unit"><%= oi.unit %></span></span>
+          <span><%= oi.quantity %></span>
+        </div>
+      <% }) %>
+      <% const notes = selected.items.filter(i => !i.item_id); %>
+      <% if (notes.length > 0) { %>
+        <p style="margin-top: 16px; margin-bottom: 4px;"><strong>Custom requests:</strong></p>
+        <% notes.forEach(function(n) { %>
+          <div class="item-row"><span><%= n.name %></span></div>
+        <% }) %>
+      <% } %>
+      <a class="btn btn-small" style="margin-top: 16px;" href="/kitchen/packing-slip/<%= shop.id %>?date=<%= selectedDate %>" target="_blank">Print Packing Slip</a>
+    </div>
+  <% } %>
+
+  <h2 style="margin-top: 40px;">All Order Dates</h2>
+  <div class="card">
+    <% if (dates.length === 0) { %>
+      <p class="muted">No orders yet from this shop.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Delivery Date</th><th>Items</th><th>Status</th><th>Late</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% dates.forEach(function(d) { %>
+            <tr>
+              <td><%= formatDate(d.delivery_date) %></td>
+              <td><%= d.total_items %></td>
+              <td><%= d.status %></td>
+              <td><% if (d.is_late) { %><span class="tag-late">Late</span><% } else { %>&mdash;<% } %></td>
+              <td><a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/orders?date=<%= d.delivery_date %>">View</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>
