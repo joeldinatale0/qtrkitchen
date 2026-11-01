@@ -30,6 +30,7 @@
           <th>Cash Sales</th>
           <th>Cash Amount</th>
           <th>Discrepancy</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -47,8 +48,15 @@
               <td class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
                 $<%= (s.discrepancy_cents / 100).toFixed(2) %>
               </td>
+              <td>
+                <form method="POST" action="/kitchen/eod-cash/delete/<%= shop.slug %>" class="inline-form"
+                      onsubmit="return confirm('Delete this cash sheet?');">
+                  <input type="hidden" name="report_date" value="<%= reportDate %>" />
+                  <button class="btn btn-small" type="submit">Delete</button>
+                </form>
+              </td>
             <% } else { %>
-              <td colspan="6" class="muted">Not submitted yet</td>
+              <td colspan="7" class="muted">Not submitted yet</td>
             <% } %>
           </tr>
         <% }) %>

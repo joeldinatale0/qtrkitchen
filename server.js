@@ -1204,6 +1204,15 @@ app.post("/kitchen/eod-cash/float/:shopSlug", requireAuth, requireRole("kitchen"
   res.redirect(`/kitchen/eod-cash?date=${req.body.report_date || melbourneDateString()}`);
 });
 
+app.post("/kitchen/eod-cash/delete/:shopSlug", requireAuth, requireRole("kitchen"), (req, res) => {
+  const reportDate = req.body.report_date || melbourneDateString();
+  db.prepare("DELETE FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?").run(
+    req.params.shopSlug,
+    reportDate
+  );
+  res.redirect(`/kitchen/eod-cash?date=${reportDate}`);
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
