@@ -4,7 +4,8 @@
     <% if (currentUser) { %>
       <span class="muted"><%= currentUser.name %></span>
       <% if (currentUser.role === 'shop') { %>
-        <a href="<%= currentUser.slug === 'essendon' ? '/choose-ordering' : '/order/select-date' %>">Order</a>
+        <a href="/choose-ordering">Menu</a>
+        <a href="/order/select-date">Food Order</a>
         <a href="/eod-cash">EOD Cash</a>
       <% } else { %>
         <a href="/kitchen">Dashboard</a>

@@ -480,8 +480,7 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => {
   if (req.session.user) {
     if (req.session.user.role === "kitchen") return res.redirect("/kitchen");
-    const landing = req.session.user.slug === "essendon" ? "/choose-ordering" : "/order/select-date";
-    return res.redirect(landing);
+    return res.redirect("/choose-ordering");
   }
   const shops = db
     .prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name")
@@ -491,7 +490,6 @@ app.get("/", (req, res) => {
 });
 
 app.get("/choose-ordering", requireAuth, requireRole("shop"), (req, res) => {
-  if (req.session.user.slug !== "essendon") return res.redirect("/order/select-date");
   res.render("choose-ordering");
 });
 
