@@ -588,11 +588,14 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
   const eftposSalesCents = toCents(req.body.eftpos_sales);
   const uberSalesCents = toCents(req.body.uber_sales);
   const cashSalesCents = toCents(req.body.cash_sales);
+  // Cash Amount is entered directly by the team for now rather than
+  // auto-calculated from till amount minus float — that is planned for
+  // later, not yet turned on.
+  const cashAmountCents = toCents(req.body.cash_amount);
 
   const floatSetting = db.prepare("SELECT float_cents FROM shop_float_settings WHERE shop_slug = ?").get(shopSlug);
   const floatCents = floatSetting ? floatSetting.float_cents : 50000;
 
-  const cashAmountCents = tillAmountCents - floatCents;
   const discrepancyCents = cashAmountCents - cashSalesCents;
 
   db.prepare(
