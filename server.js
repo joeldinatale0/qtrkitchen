@@ -1297,6 +1297,25 @@ app.post("/kitchen/eod-cash/send-test", requireAuth, requireRole("kitchen"), asy
   }
 });
 
+// Self-service credential update for the currently-logged-in admin/kitchen
+// account. No credentials are hardcoded anywhere in source — the new
+// values are supplied in the request body only.
+app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"), (req, res) => {
+  const { name, username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "username and password are required" });
+
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare("UPDATE users SET name = COALESCE(?, name), username = ?, password_hash = ? WHERE id = ?").run(
+    name || null,
+    username.trim().toLowerCase(),
+    hash,
+    req.session.user.id
+  );
+  req.session.destroy(() => {
+    res.json({ ok: true, message: "Credentials updated — log in again with the new username and password." });
+  });
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
