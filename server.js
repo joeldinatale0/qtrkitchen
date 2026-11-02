@@ -6,6 +6,7 @@ const session = require("express-session");
 const SqliteStore = require("better-sqlite3-session-store")(session);
 const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
+const nodemailer = require("nodemailer");
 const db = require("./db");
 const { buildWeeklySummaryPdf } = require("./invoice-pdf");
 const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport } = require("./shop-reports");
@@ -25,6 +26,33 @@ const EMAIL_TO = process.env.ORDER_EMAIL_TO || "qtrcentralkitchen@gmail.com";
 const DAILY_REPORT_EMAIL_TO = process.env.DAILY_REPORT_EMAIL_TO || "thecoffeeqtr@gmail.com";
 const ORDER_CUTOFF_HOUR = 14; // 2:00 PM
 
+// Every email in the app sends through Gmail (an App Password on
+// qtrcentralkitchen@gmail.com), not Resend — Resend's sandbox mode only
+// delivers to one pre-verified address until a domain is verified there,
+// which blocked sending reports to a second inbox. Gmail has no such limit.
+const GMAIL_USER = process.env.GMAIL_USER || "qtrcentralkitchen@gmail.com";
+const mailTransport = process.env.GMAIL_APP_PASSWORD
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+    })
+  : null;
+
+async function sendEmail({ to, subject, text, attachments }) {
+  if (!mailTransport) throw new Error("GMAIL_APP_PASSWORD is missing");
+  await mailTransport.sendMail({
+    from: `QTR Kitchen Ordering <${GMAIL_USER}>`,
+    to,
+    subject,
+    text,
+    attachments: (attachments || []).map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      encoding: "base64",
+    })),
+  });
+}
+
 // Orders are due by 2:00 PM Melbourne time each day for next-day delivery.
 function isLateSubmission() {
   const parts = new Intl.DateTimeFormat("en-AU", {
@@ -42,7 +70,7 @@ function isLateSubmission() {
 // Sent via Resend's HTTPS API (not raw SMTP) since cloud hosts commonly block
 // outbound SMTP ports for spam prevention.
 function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit) {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
 
   const lines = orderedItems.map((i) => `  - ${i.quantity} x ${i.name} (${i.unit})`);
   if (customNotes.length) {
@@ -67,23 +95,8 @@ function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLa
     : "";
   const subject = `${subjectPrefix}Order from ${shop.name} — delivery ${deliveryDateLabel}`;
 
-  fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-      to: EMAIL_TO,
-      subject,
-      text,
-    }),
-  })
-    .then(async (res) => {
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      console.log(`Order email sent for ${shop.name}`);
-    })
+  sendEmail({ to: EMAIL_TO, subject, text })
+    .then(() => console.log(`Order email sent for ${shop.name}`))
     .catch((err) => console.error("Failed to send order email:", err.message));
 }
 
@@ -112,7 +125,7 @@ function melbourneHour() {
 // Uses better-sqlite3's safe .backup() rather than reading the live file
 // directly, to avoid grabbing an inconsistent snapshot mid-write.
 async function sendDailyBackupIfDue() {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
   const today = melbourneDateString();
   const already = db.prepare("SELECT 1 FROM backup_log WHERE backup_date = ?").get(today);
   if (already) return;
@@ -123,26 +136,17 @@ async function sendDailyBackupIfDue() {
     await db.backup(tempPath);
     const fileBuffer = fs.readFileSync(tempPath);
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: DAILY_REPORT_EMAIL_TO,
-        subject: `Daily backup — ${today}`,
-        text: `Automatic daily backup of the QTR Kitchen Ordering database for ${today}. Keep this email in case data ever needs to be restored.`,
-        attachments: [
-          {
-            filename: `qtr-kitchen-backup-${today}.sqlite`,
-            content: fileBuffer.toString("base64"),
-          },
-        ],
-      }),
+    await sendEmail({
+      to: DAILY_REPORT_EMAIL_TO,
+      subject: `Daily backup — ${today}`,
+      text: `Automatic daily backup of the QTR Kitchen Ordering database for ${today}. Keep this email in case data ever needs to be restored.`,
+      attachments: [
+        {
+          filename: `qtr-kitchen-backup-${today}.sqlite`,
+          content: fileBuffer.toString("base64"),
+        },
+      ],
     });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
 
     db.prepare("INSERT INTO backup_log (backup_date) VALUES (?)").run(today);
     console.log(`Daily backup emailed for ${today}`);
@@ -154,7 +158,7 @@ async function sendDailyBackupIfDue() {
 }
 
 async function sendWeeklySummaryIfDue() {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
   const today = melbourneDateString();
   const todayDow = new Date(today + "T00:00:00").getDay(); // 1 = Monday
   if (todayDow !== 1) return;
@@ -212,26 +216,17 @@ async function sendWeeklySummaryIfDue() {
         weeklyTotals
       );
 
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-          to: DAILY_REPORT_EMAIL_TO,
-          subject: `Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
-          text: `Attached: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
-          attachments: [
-            {
-              filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`,
-              content: pdfBuffer.toString("base64"),
-            },
-          ],
-        }),
+      await sendEmail({
+        to: DAILY_REPORT_EMAIL_TO,
+        subject: `Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
+        text: `Attached: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
+        attachments: [
+          {
+            filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`,
+            content: pdfBuffer.toString("base64"),
+          },
+        ],
       });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
 
       db.prepare(
         "INSERT INTO invoice_log (week_start_date, shop_id) VALUES (?, ?)"
@@ -246,7 +241,7 @@ async function sendWeeklySummaryIfDue() {
 const DAILY_SHOP_REPORT_HOUR = 17; // 5:00 PM Melbourne time
 
 async function sendDailyShopReportsIfDue() {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
   if (melbourneHour() < DAILY_SHOP_REPORT_HOUR) return;
   const today = melbourneDateString();
 
@@ -260,20 +255,11 @@ async function sendDailyShopReportsIfDue() {
       const report = await buildDailyShopReport(db, shopSlug, config.displayName, addDays);
       if (!report) continue; // missing Square/Tanda credentials
 
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-          to: DAILY_REPORT_EMAIL_TO,
-          subject: `Daily Report — ${config.displayName} — ${today}`,
-          text: formatDailyReportEmail(report),
-        }),
+      await sendEmail({
+        to: DAILY_REPORT_EMAIL_TO,
+        subject: `Daily Report — ${config.displayName} — ${today}`,
+        text: formatDailyReportEmail(report),
       });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
 
       db.prepare("INSERT INTO daily_report_log (report_date, shop_slug) VALUES (?, ?)").run(
         today,
@@ -320,7 +306,7 @@ function buildCookieBakeEmail(bakeDate) {
 }
 
 async function sendCookieBakeListIfDue() {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
   if (melbourneHour() < COOKIE_BAKE_HOUR) return;
   const today = melbourneDateString();
 
@@ -332,20 +318,7 @@ async function sendCookieBakeListIfDue() {
     const email = buildCookieBakeEmail(bakeDate);
     if (!email) return;
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: EMAIL_TO,
-        subject: email.subject,
-        text: email.text,
-      }),
-    });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    await sendEmail({ to: EMAIL_TO, subject: email.subject, text: email.text });
 
     db.prepare("INSERT INTO cookie_bake_log (report_date) VALUES (?)").run(today);
     console.log(`Cookie baking list emailed for ${bakeDate}`);
@@ -385,7 +358,7 @@ function buildEodCashReportEmail(reportDate) {
 }
 
 async function sendEodCashReportIfDue() {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.GMAIL_APP_PASSWORD) return;
   if (melbourneHour() < EOD_CASH_REPORT_HOUR) return;
   const today = melbourneDateString();
 
@@ -395,20 +368,7 @@ async function sendEodCashReportIfDue() {
   try {
     const email = buildEodCashReportEmail(today);
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: DAILY_REPORT_EMAIL_TO,
-        subject: email.subject,
-        text: email.text,
-      }),
-    });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    await sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
 
     db.prepare("INSERT INTO eod_cash_report_log (report_date) VALUES (?)").run(today);
     console.log(`EOD cash report emailed for ${today}`);
@@ -1184,9 +1144,9 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
   const { shop_slug, date, to } = req.body;
   const config = SHOP_INTEGRATIONS[shop_slug];
 
-  if (!config || !process.env.RESEND_API_KEY) {
+  if (!config || !process.env.GMAIL_APP_PASSWORD) {
     return res.redirect(
-      `/kitchen/reports?error=1&msg=${encodeURIComponent("Shop not connected, or RESEND_API_KEY is missing")}`
+      `/kitchen/reports?error=1&msg=${encodeURIComponent("Shop not connected, or GMAIL_APP_PASSWORD is missing")}`
     );
   }
 
@@ -1200,20 +1160,11 @@ app.post("/kitchen/reports/send", requireAuth, requireRole("kitchen"), async (re
       );
     }
 
-    const res2 = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: (to || "").trim() || DAILY_REPORT_EMAIL_TO,
-        subject: `TEST Daily Report — ${config.displayName} — ${report.dateStr}`,
-        text: formatDailyReportEmail(report),
-      }),
+    await sendEmail({
+      to: (to || "").trim() || DAILY_REPORT_EMAIL_TO,
+      subject: `TEST Daily Report — ${config.displayName} — ${report.dateStr}`,
+      text: formatDailyReportEmail(report),
     });
-    if (!res2.ok) throw new Error(`${res2.status} ${await res2.text()}`);
 
     res.redirect("/kitchen/reports?sent=1");
   } catch (err) {
@@ -1270,27 +1221,14 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
 // and the once-a-day dedup log, so it's safe to trigger any time without
 // affecting the real scheduled send.
 app.post("/kitchen/reports/cookie-bake/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
-  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
+  if (!process.env.GMAIL_APP_PASSWORD) return res.status(400).json({ error: "GMAIL_APP_PASSWORD is missing" });
   try {
     const bakeDate = (req.body && req.body.bake_date) || tomorrow();
     const email = buildCookieBakeEmail(bakeDate);
     if (!email) return res.status(400).json({ error: "No bake target for that date's weekday" });
 
     const to = (req.body && req.body.to) || EMAIL_TO;
-    const emailRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to,
-        subject: email.subject,
-        text: email.text,
-      }),
-    });
-    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
+    await sendEmail({ to, subject: email.subject, text: email.text });
     res.json({ ok: true, to, subject: email.subject, text: email.text });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1343,26 +1281,13 @@ app.post("/kitchen/eod-cash/delete/:shopSlug", requireAuth, requireRole("kitchen
 // Manual test send for the 8pm EOD cash report — ignores the hour gate and
 // the once-a-day dedup log.
 app.post("/kitchen/eod-cash/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
-  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
+  if (!process.env.GMAIL_APP_PASSWORD) return res.status(400).json({ error: "GMAIL_APP_PASSWORD is missing" });
   try {
     const reportDate = (req.body && req.body.report_date) || melbourneDateString();
     const email = buildEodCashReportEmail(reportDate);
     const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
 
-    const emailRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to,
-        subject: email.subject,
-        text: email.text,
-      }),
-    });
-    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
+    await sendEmail({ to, subject: email.subject, text: email.text });
     res.json({ ok: true, to, subject: email.subject, text: email.text });
   } catch (err) {
     res.status(500).json({ error: err.message });
