@@ -327,66 +327,35 @@ async function sendCookieBakeListIfDue() {
   }
 }
 
-const EOD_CASH_REPORT_HOUR = 20; // 8:00 PM Melbourne time — after shops have closed and submitted
+// One shop's EOD cash report — sent the moment that shop submits (or
+// resubmits) its cash sheet for a date, not on a delayed daily schedule.
+function buildEodCashReportEmail(shopName, reportDate, sheet, isUpdate) {
+  const money = (cents) => `$${(cents / 100).toFixed(2)}`;
+  const lines = [
+    `EOD Cash Report — ${shopName} — ${reportDate}`,
+    ``,
+    `  Till Amount:  ${money(sheet.till_amount_cents)}`,
+    `  EFTPOS:       ${money(sheet.eftpos_sales_cents)}`,
+    `  Uber:         ${money(sheet.uber_sales_cents)}`,
+    `  Cash Sales:   ${money(sheet.cash_sales_cents)}`,
+    `  Cash Amount:  ${money(sheet.cash_amount_cents)}`,
+    `  Discrepancy:  ${money(sheet.discrepancy_cents)}`,
+  ];
 
-// bakeDate param name kept consistent with buildCookieBakeEmail's style —
-// here it is just "the day being reported on".
-function buildEodCashReportEmail(reportDate) {
-  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
-
-  const lines = [`EOD Cash Report — ${reportDate}`, ``];
-  for (const shop of shops) {
-    const s = db
-      .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?")
-      .get(shop.slug, reportDate);
-    lines.push(shop.name);
-    if (!s) {
-      lines.push(`  Not submitted`);
-    } else {
-      const money = (cents) => `$${(cents / 100).toFixed(2)}`;
-      lines.push(`  Till Amount:  ${money(s.till_amount_cents)}`);
-      lines.push(`  EFTPOS:       ${money(s.eftpos_sales_cents)}`);
-      lines.push(`  Uber:         ${money(s.uber_sales_cents)}`);
-      lines.push(`  Cash Sales:   ${money(s.cash_sales_cents)}`);
-      lines.push(`  Cash Amount:  ${money(s.cash_amount_cents)}`);
-      lines.push(`  Discrepancy:  ${money(s.discrepancy_cents)}`);
-    }
-    lines.push(``);
-  }
-
-  return { subject: `EOD Cash Report — ${reportDate}`, text: lines.join("\n") };
-}
-
-async function sendEodCashReportIfDue() {
-  if (!process.env.GMAIL_APP_PASSWORD) return;
-  if (melbourneHour() < EOD_CASH_REPORT_HOUR) return;
-  const today = melbourneDateString();
-
-  const already = db.prepare("SELECT 1 FROM eod_cash_report_log WHERE report_date = ?").get(today);
-  if (already) return;
-
-  try {
-    const email = buildEodCashReportEmail(today);
-
-    await sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
-
-    db.prepare("INSERT INTO eod_cash_report_log (report_date) VALUES (?)").run(today);
-    console.log(`EOD cash report emailed for ${today}`);
-  } catch (err) {
-    console.error("EOD cash report failed:", err.message);
-  }
+  return {
+    subject: `${isUpdate ? "UPDATED " : ""}EOD Cash Report — ${shopName} — ${reportDate}`,
+    text: lines.join("\n"),
+  };
 }
 
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
 setInterval(sendCookieBakeListIfDue, 1000 * 60 * 60);
-setInterval(sendEodCashReportIfDue, 1000 * 60 * 60);
 sendDailyBackupIfDue();
 sendWeeklySummaryIfDue();
 sendDailyShopReportsIfDue();
 sendCookieBakeListIfDue();
-sendEodCashReportIfDue();
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
@@ -623,6 +592,10 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
 
   const discrepancyCents = cashAmountCents - cashSalesCents;
 
+  const isUpdate = Boolean(
+    db.prepare("SELECT 1 FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?").get(shopSlug, reportDate)
+  );
+
   db.prepare(
     `INSERT INTO eod_cash_sheets
        (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, submitted_by, submitted_at)
@@ -649,6 +622,26 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     discrepancyCents,
     req.session.user.name
   );
+
+  // Fire-and-forget: the submitting shop should not wait on email delivery.
+  if (process.env.GMAIL_APP_PASSWORD) {
+    const email = buildEodCashReportEmail(
+      req.session.user.name,
+      reportDate,
+      {
+        till_amount_cents: tillAmountCents,
+        eftpos_sales_cents: eftposSalesCents,
+        uber_sales_cents: uberSalesCents,
+        cash_sales_cents: cashSalesCents,
+        cash_amount_cents: cashAmountCents,
+        discrepancy_cents: discrepancyCents,
+      },
+      isUpdate
+    );
+    sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text }).catch((err) =>
+      console.error("EOD cash report email failed:", err.message)
+    );
+  }
 
   res.redirect(`/eod-cash?date=${reportDate}&saved=1`);
 });
@@ -1278,13 +1271,23 @@ app.post("/kitchen/eod-cash/delete/:shopSlug", requireAuth, requireRole("kitchen
   res.redirect(`/kitchen/eod-cash?date=${reportDate}`);
 });
 
-// Manual test send for the 8pm EOD cash report — ignores the hour gate and
-// the once-a-day dedup log.
+// Manual re-send of one shop's already-submitted EOD cash report (the real
+// one goes out automatically the moment that shop submits — see POST
+// /eod-cash — this is just for resending/testing on demand).
 app.post("/kitchen/eod-cash/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
   if (!process.env.GMAIL_APP_PASSWORD) return res.status(400).json({ error: "GMAIL_APP_PASSWORD is missing" });
   try {
+    const shopSlug = req.body && req.body.shop_slug;
     const reportDate = (req.body && req.body.report_date) || melbourneDateString();
-    const email = buildEodCashReportEmail(reportDate);
+    const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(shopSlug);
+    if (!shop) return res.status(400).json({ error: "shop_slug is required" });
+
+    const sheet = db
+      .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?")
+      .get(shopSlug, reportDate);
+    if (!sheet) return res.status(400).json({ error: "No cash sheet submitted for that shop/date" });
+
+    const email = buildEodCashReportEmail(shop.name, reportDate, sheet, true);
     const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
 
     await sendEmail({ to, subject: email.subject, text: email.text });
