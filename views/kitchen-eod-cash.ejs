@@ -38,17 +38,17 @@
           const s = sheetsByShop[shop.slug];
         %>
           <tr>
-            <td style="text-align: left; font-weight: 700;"><%= shop.name %></td>
+            <td data-label="Store" style="text-align: left; font-weight: 700;"><%= shop.name %></td>
             <% if (s) { %>
-              <td>$<%= (s.till_amount_cents / 100).toFixed(2) %></td>
-              <td>$<%= (s.eftpos_sales_cents / 100).toFixed(2) %></td>
-              <td>$<%= (s.uber_sales_cents / 100).toFixed(2) %></td>
-              <td>$<%= (s.cash_sales_cents / 100).toFixed(2) %></td>
-              <td class="eod-computed">$<%= (s.cash_amount_cents / 100).toFixed(2) %></td>
-              <td class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
+              <td data-label="Till Amount">$<%= (s.till_amount_cents / 100).toFixed(2) %></td>
+              <td data-label="EFTPOS">$<%= (s.eftpos_sales_cents / 100).toFixed(2) %></td>
+              <td data-label="Uber">$<%= (s.uber_sales_cents / 100).toFixed(2) %></td>
+              <td data-label="Cash Sales">$<%= (s.cash_sales_cents / 100).toFixed(2) %></td>
+              <td data-label="Cash Amount" class="eod-computed">$<%= (s.cash_amount_cents / 100).toFixed(2) %></td>
+              <td data-label="Discrepancy" class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
                 $<%= (s.discrepancy_cents / 100).toFixed(2) %>
               </td>
-              <td>
+              <td data-label="">
                 <form method="POST" action="/kitchen/eod-cash/delete/<%= shop.slug %>" class="inline-form"
                       onsubmit="return confirm('Delete this cash sheet?');">
                   <input type="hidden" name="report_date" value="<%= reportDate %>" />

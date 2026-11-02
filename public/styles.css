@@ -10,12 +10,18 @@
   box-sizing: border-box;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: var(--cream);
   color: var(--near-black);
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   line-height: 1.6;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 a {
@@ -26,7 +32,9 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 32px;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--warm-stone);
   background: var(--paper);
 }
@@ -40,7 +48,8 @@ a {
 
 .topbar nav {
   display: flex;
-  gap: 24px;
+  flex-wrap: wrap;
+  gap: 14px 20px;
   align-items: center;
   font-size: 14px;
 }
@@ -58,6 +67,21 @@ a {
   max-width: 920px;
   margin: 0 auto;
   padding: 48px 32px 96px;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 14px 16px;
+  }
+
+  .topbar nav {
+    gap: 10px 14px;
+    font-size: 13px;
+  }
+
+  .container {
+    padding: 28px 16px 72px;
+  }
 }
 
 h1 {
@@ -90,6 +114,7 @@ h2 {
   padding: 24px;
   margin-bottom: 24px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  overflow-x: auto;
 }
 
 .item-row {
@@ -405,6 +430,7 @@ table td {
   border-radius: 10px;
   padding: 36px 40px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  overflow-x: auto;
 }
 
 .eod-head {
@@ -550,6 +576,82 @@ table td {
 .btn-eod:hover {
   background: #561827;
   opacity: 1;
+}
+
+@media (max-width: 640px) {
+  .eod-page {
+    padding: 20px 14px 72px;
+  }
+
+  .eod-card {
+    padding: 22px 18px;
+  }
+
+  .eod-title {
+    font-size: 22px;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+
+  .eod-meta {
+    gap: 16px;
+  }
+
+  /* Turn each table row into a stacked, labelled block instead of
+     scrolling sideways — there is usually just one row to fill in. */
+  .eod-table,
+  .eod-table thead,
+  .eod-table tbody,
+  .eod-table tr,
+  .eod-table th,
+  .eod-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .eod-table thead {
+    display: none;
+  }
+
+  .eod-table tr {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--qtr-baby-blue);
+  }
+
+  .eod-table tr:last-child {
+    border-bottom: none;
+  }
+
+  .eod-table tbody tr:nth-child(odd) {
+    background: transparent;
+  }
+
+  .eod-table td {
+    text-align: left;
+    border-bottom: none;
+    padding: 6px 0;
+  }
+
+  .eod-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--qtr-burgundy);
+    opacity: 0.7;
+    margin-bottom: 4px;
+  }
+
+  .eod-table td:empty::before,
+  .eod-table td[data-label=""]::before {
+    content: none;
+  }
+
+  .eod-table input[type="number"] {
+    width: 100%;
+  }
 }
 
 @media print {

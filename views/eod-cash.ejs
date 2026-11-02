@@ -40,27 +40,27 @@
         </thead>
         <tbody>
           <tr>
-            <td>
+            <td data-label="Till Amount (Counted)">
               $ <input type="number" step="0.01" name="till_amount" id="till_amount"
                   value="<%= existing ? (existing.till_amount_cents / 100).toFixed(2) : '' %>" required />
             </td>
-            <td>
+            <td data-label="EFTPOS Sales">
               $ <input type="number" step="0.01" name="eftpos_sales" id="eftpos_sales"
                   value="<%= existing ? (existing.eftpos_sales_cents / 100).toFixed(2) : '' %>" required />
             </td>
-            <td>
+            <td data-label="Uber Sales">
               $ <input type="number" step="0.01" name="uber_sales" id="uber_sales"
                   value="<%= existing ? (existing.uber_sales_cents / 100).toFixed(2) : '' %>" required />
             </td>
-            <td>
+            <td data-label="Cash Sales">
               $ <input type="number" step="0.01" name="cash_sales" id="cash_sales"
                   value="<%= existing ? (existing.cash_sales_cents / 100).toFixed(2) : '' %>" required />
             </td>
-            <td>
+            <td data-label="Cash Amount">
               $ <input type="number" step="0.01" name="cash_amount" id="cash_amount"
                   value="<%= existing ? (existing.cash_amount_cents / 100).toFixed(2) : '' %>" required />
             </td>
-            <td class="eod-discrepancy <%= !existing ? '' : (existing.discrepancy_cents < 0 ? 'short' : existing.discrepancy_cents > 0 ? 'over' : 'even') %>" id="discrepancy_display">
+            <td data-label="Discrepancy" class="eod-discrepancy <%= !existing ? '' : (existing.discrepancy_cents < 0 ? 'short' : existing.discrepancy_cents > 0 ? 'over' : 'even') %>" id="discrepancy_display">
               <%= existing ? '$' + (existing.discrepancy_cents / 100).toFixed(2) : '—' %>
             </td>
           </tr>
