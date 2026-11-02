@@ -202,6 +202,11 @@ db.exec(`
     submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(shop_slug, report_date)
   );
+
+  CREATE TABLE IF NOT EXISTS eod_cash_report_log (
+    report_date TEXT NOT NULL UNIQUE,
+    sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from

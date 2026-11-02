@@ -131,7 +131,7 @@ async function sendDailyBackupIfDue() {
       },
       body: JSON.stringify({
         from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-        to: EMAIL_TO,
+        to: DAILY_REPORT_EMAIL_TO,
         subject: `Daily backup — ${today}`,
         text: `Automatic daily backup of the QTR Kitchen Ordering database for ${today}. Keep this email in case data ever needs to be restored.`,
         attachments: [
@@ -220,7 +220,7 @@ async function sendWeeklySummaryIfDue() {
         },
         body: JSON.stringify({
           from: "QTR Kitchen Ordering <onboarding@resend.dev>",
-          to: EMAIL_TO,
+          to: DAILY_REPORT_EMAIL_TO,
           subject: `Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
           text: `Attached: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
           attachments: [
@@ -354,14 +354,79 @@ async function sendCookieBakeListIfDue() {
   }
 }
 
+const EOD_CASH_REPORT_HOUR = 20; // 8:00 PM Melbourne time — after shops have closed and submitted
+
+// bakeDate param name kept consistent with buildCookieBakeEmail's style —
+// here it is just "the day being reported on".
+function buildEodCashReportEmail(reportDate) {
+  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
+
+  const lines = [`EOD Cash Report — ${reportDate}`, ``];
+  for (const shop of shops) {
+    const s = db
+      .prepare("SELECT * FROM eod_cash_sheets WHERE shop_slug = ? AND report_date = ?")
+      .get(shop.slug, reportDate);
+    lines.push(shop.name);
+    if (!s) {
+      lines.push(`  Not submitted`);
+    } else {
+      const money = (cents) => `$${(cents / 100).toFixed(2)}`;
+      lines.push(`  Till Amount:  ${money(s.till_amount_cents)}`);
+      lines.push(`  EFTPOS:       ${money(s.eftpos_sales_cents)}`);
+      lines.push(`  Uber:         ${money(s.uber_sales_cents)}`);
+      lines.push(`  Cash Sales:   ${money(s.cash_sales_cents)}`);
+      lines.push(`  Cash Amount:  ${money(s.cash_amount_cents)}`);
+      lines.push(`  Discrepancy:  ${money(s.discrepancy_cents)}`);
+    }
+    lines.push(``);
+  }
+
+  return { subject: `EOD Cash Report — ${reportDate}`, text: lines.join("\n") };
+}
+
+async function sendEodCashReportIfDue() {
+  if (!process.env.RESEND_API_KEY) return;
+  if (melbourneHour() < EOD_CASH_REPORT_HOUR) return;
+  const today = melbourneDateString();
+
+  const already = db.prepare("SELECT 1 FROM eod_cash_report_log WHERE report_date = ?").get(today);
+  if (already) return;
+
+  try {
+    const email = buildEodCashReportEmail(today);
+
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to: DAILY_REPORT_EMAIL_TO,
+        subject: email.subject,
+        text: email.text,
+      }),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+    db.prepare("INSERT INTO eod_cash_report_log (report_date) VALUES (?)").run(today);
+    console.log(`EOD cash report emailed for ${today}`);
+  } catch (err) {
+    console.error("EOD cash report failed:", err.message);
+  }
+}
+
 setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
 setInterval(sendCookieBakeListIfDue, 1000 * 60 * 60);
+setInterval(sendEodCashReportIfDue, 1000 * 60 * 60);
 sendDailyBackupIfDue();
 sendWeeklySummaryIfDue();
 sendDailyShopReportsIfDue();
 sendCookieBakeListIfDue();
+sendEodCashReportIfDue();
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
@@ -1273,6 +1338,35 @@ app.post("/kitchen/eod-cash/delete/:shopSlug", requireAuth, requireRole("kitchen
     reportDate
   );
   res.redirect(`/kitchen/eod-cash?date=${reportDate}`);
+});
+
+// Manual test send for the 8pm EOD cash report — ignores the hour gate and
+// the once-a-day dedup log.
+app.post("/kitchen/eod-cash/send-test", requireAuth, requireRole("kitchen"), async (req, res) => {
+  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: "RESEND_API_KEY is missing" });
+  try {
+    const reportDate = (req.body && req.body.report_date) || melbourneDateString();
+    const email = buildEodCashReportEmail(reportDate);
+    const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
+
+    const emailRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "QTR Kitchen Ordering <onboarding@resend.dev>",
+        to,
+        subject: email.subject,
+        text: email.text,
+      }),
+    });
+    if (!emailRes.ok) throw new Error(`${emailRes.status} ${await emailRes.text()}`);
+    res.json({ ok: true, to, subject: email.subject, text: email.text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Kitchen: manage par levels per shop ----------
