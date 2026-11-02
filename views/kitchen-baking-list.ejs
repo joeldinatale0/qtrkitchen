@@ -1,0 +1,31 @@
+<%- include('partials/head', { title: "Baking List — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
+  <h1>Cookie Baking List</h1>
+  <p class="subtitle">
+    Combined total for Essendon, Highpoint and QTR Moonee Ponds — not split per shop. Emailed automatically every
+    day at 4pm for the next morning.
+  </p>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Day</th><th>Choc Chip</th><th>M&amp;M</th></tr>
+      </thead>
+      <tbody>
+        <% rows.forEach(function(r) { %>
+          <tr>
+            <td><%= r.day %></td>
+            <td><%= r.chocchip %></td>
+            <td><%= r.mnm %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</body>
+</html>

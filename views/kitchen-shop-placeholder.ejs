@@ -1,0 +1,13 @@
+<%- include('partials/head', { title: title + " — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+  <h1><%= title %></h1>
+  <div class="card">
+    <p class="muted" style="margin: 0;"><%= message %></p>
+  </div>
+</div>
+
+</body>
+</html>

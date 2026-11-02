@@ -1,0 +1,34 @@
+<%- include('partials/head', { title: shop.name + " Invoices — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+  <h1><%= shop.name %> — Weekly Invoices</h1>
+  <p class="subtitle">Every week an invoice has been sent, most recent first. Click to view/download the PDF.</p>
+
+  <div class="card">
+    <% if (weeks.length === 0) { %>
+      <p class="muted">No invoices sent yet.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Week Starting</th><th>Sent</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% weeks.forEach(function(w) { %>
+            <tr>
+              <td><%= formatDate(w.week_start_date) %></td>
+              <td><%= w.sent_at %></td>
+              <td>
+                <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/invoices/<%= w.week_start_date %>.pdf" target="_blank">View PDF</a>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

@@ -9,6 +9,7 @@ const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
 const db = require("./db");
 const { buildWeeklySummaryPdf } = require("./invoice-pdf");
+const { COGS_BY_SHOP } = require("./cogs-data");
 const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport } = require("./shop-reports");
 
 const app = express();
@@ -157,6 +158,44 @@ async function sendDailyBackupIfDue() {
   }
 }
 
+// Shared by the Monday auto-email and the on-demand admin PDF view.
+function buildWeeklyInvoiceData(shopId, weekStart, weekEnd) {
+  const dailyRows = db
+    .prepare(
+      `SELECT o.delivery_date, oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN items i ON i.id = oi.item_id
+       WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
+       GROUP BY o.delivery_date, oi.name, oi.unit
+       ORDER BY o.delivery_date, oi.name`
+    )
+    .all(shopId, weekStart, weekEnd);
+
+  const dailyBreakdown = [];
+  for (let i = 0; i < 7; i++) {
+    const date = addDays(weekStart, i);
+    dailyBreakdown.push({
+      dateLabel: formatDate(date),
+      items: dailyRows
+        .filter((r) => r.delivery_date === date)
+        .map((r) => ({ name: r.name, unit: r.unit, quantity: r.quantity, price: r.price })),
+    });
+  }
+
+  const weeklyTotalsMap = {};
+  for (const r of dailyRows) {
+    const key = `${r.name}|${r.unit}`;
+    if (!weeklyTotalsMap[key]) {
+      weeklyTotalsMap[key] = { name: r.name, unit: r.unit, quantity: 0, price: r.price };
+    }
+    weeklyTotalsMap[key].quantity += r.quantity;
+  }
+  const weeklyTotals = Object.values(weeklyTotalsMap).sort((a, b) => a.name.localeCompare(b.name));
+
+  return { dailyBreakdown, weeklyTotals };
+}
+
 async function sendWeeklySummaryIfDue() {
   if (!process.env.GMAIL_APP_PASSWORD) return;
   const today = melbourneDateString();
@@ -175,38 +214,7 @@ async function sendWeeklySummaryIfDue() {
     if (already) continue;
 
     try {
-      const dailyRows = db
-        .prepare(
-          `SELECT o.delivery_date, oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
-           FROM order_items oi
-           JOIN orders o ON o.id = oi.order_id
-           LEFT JOIN items i ON i.id = oi.item_id
-           WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
-           GROUP BY o.delivery_date, oi.name, oi.unit
-           ORDER BY o.delivery_date, oi.name`
-        )
-        .all(shop.id, weekStart, weekEnd);
-
-      const dailyBreakdown = [];
-      for (let i = 0; i < 7; i++) {
-        const date = addDays(weekStart, i);
-        dailyBreakdown.push({
-          dateLabel: formatDate(date),
-          items: dailyRows
-            .filter((r) => r.delivery_date === date)
-            .map((r) => ({ name: r.name, unit: r.unit, quantity: r.quantity, price: r.price })),
-        });
-      }
-
-      const weeklyTotalsMap = {};
-      for (const r of dailyRows) {
-        const key = `${r.name}|${r.unit}`;
-        if (!weeklyTotalsMap[key]) {
-          weeklyTotalsMap[key] = { name: r.name, unit: r.unit, quantity: 0, price: r.price };
-        }
-        weeklyTotalsMap[key].quantity += r.quantity;
-      }
-      const weeklyTotals = Object.values(weeklyTotalsMap).sort((a, b) => a.name.localeCompare(b.name));
+      const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
 
       const pdfBuffer = await buildWeeklySummaryPdf(
         shop,
@@ -904,6 +912,83 @@ app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (re
     .all(shop.slug);
 
   res.render("kitchen-shop-eod-cash", { shop, sheets });
+});
+
+app.get("/kitchen/shop/:slug/invoices", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+
+  const weeks = db
+    .prepare("SELECT week_start_date, sent_at FROM invoice_log WHERE shop_id = ? ORDER BY week_start_date DESC")
+    .all(shop.id);
+
+  res.render("kitchen-shop-invoices", { shop, weeks });
+});
+
+app.get(
+  "/kitchen/shop/:slug/invoices/:weekStart.pdf",
+  requireAuth,
+  requireRole("kitchen"),
+  async (req, res) => {
+    const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+    if (!shop) return res.status(404).send("Shop not found");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.weekStart)) return res.status(400).send("Invalid week");
+
+    try {
+      const { weekStart, weekEnd } = weekBounds(req.params.weekStart);
+      const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
+      const pdfBuffer = await buildWeeklySummaryPdf(
+        shop,
+        formatDate(weekStart),
+        formatDate(weekEnd),
+        dailyBreakdown,
+        weeklyTotals
+      );
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `inline; filename="weekly-invoice-${shop.slug}-${weekStart}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      res.status(500).send(`Failed to build invoice: ${err.message}`);
+    }
+  }
+);
+
+app.get("/kitchen/shop/:slug/cogs", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+
+  const cogsMap = COGS_BY_SHOP[shop.slug] || {};
+  const items = Object.entries(cogsMap)
+    .map(([name, cents]) => ({ name, dollars: cents / 100 }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  res.render("kitchen-shop-cogs", { shop, items });
+});
+
+// Placeholder — not built yet, needs real quantities/formulas from Joel the
+// same way the cookie baking list was set up.
+app.get("/kitchen/shop/:slug/chia-oats-prep", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+  res.render("kitchen-shop-placeholder", {
+    shop,
+    title: "Chia & Oats Prep",
+    message: "Not set up yet — needs real prep quantities before this can show anything useful.",
+  });
+});
+
+// Combined cookie-baking schedule (choc chip / M&M per weekday) — one total
+// across Essendon, Highpoint and QTR Moonee Ponds, not split per shop,
+// which is why this lives at its own path rather than under one shop.
+app.get("/kitchen/baking-list", requireAuth, requireRole("kitchen"), (req, res) => {
+  const targets = db.prepare("SELECT * FROM cookie_bake_targets ORDER BY weekday").all();
+  const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const rows = targets.map((t) => ({
+    day: weekdayNames[t.weekday],
+    chocchip: t.chocchip_qty,
+    mnm: t.mnm_qty,
+  }));
+  res.render("kitchen-baking-list", { rows });
 });
 
 // Today's (or any date's) combined prep list across all shops — the

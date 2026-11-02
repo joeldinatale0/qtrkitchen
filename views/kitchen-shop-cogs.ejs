@@ -1,0 +1,31 @@
+<%- include('partials/head', { title: shop.name + " COGS — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+  <h1><%= shop.name %> — Current COGS</h1>
+  <p class="subtitle">Cost of goods sold per menu item, as currently priced for this shop.</p>
+
+  <div class="card">
+    <% if (items.length === 0) { %>
+      <p class="muted">No COGS data priced for this shop yet.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Cost</th></tr>
+        </thead>
+        <tbody>
+          <% items.forEach(function(i) { %>
+            <tr>
+              <td><%= i.name %></td>
+              <td>$<%= i.dollars.toFixed(2) %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

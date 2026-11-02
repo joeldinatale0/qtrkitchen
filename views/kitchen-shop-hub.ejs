@@ -4,23 +4,39 @@
 <div class="container">
   <p class="muted"><a href="/kitchen">&larr; All shops</a></p>
   <h1><%= shop.name %></h1>
-  <p class="subtitle">Orders, EOD cash sheets<% if (hasReports) { %> and sales reports<% } %> for this shop.</p>
+  <p class="subtitle">Pick a category.</p>
 
   <div class="card">
-    <div class="item-row">
-      <span class="item-name">EOD Cash Sheets</span>
-      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/eod-cash">Open</a>
-    </div>
-    <div class="item-row">
-      <span class="item-name">Food Order History</span>
-      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/orders">Open</a>
-    </div>
     <% if (hasReports) { %>
       <div class="item-row">
-        <span class="item-name">Daily Sales &amp; Labour Report</span>
+        <span class="item-name">Sales Reports</span>
         <a class="btn btn-small" href="/kitchen/reports">Open</a>
       </div>
     <% } %>
+    <div class="item-row">
+      <span class="item-name">EOD Cash Reports</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/eod-cash">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Food Orders</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/orders">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Invoices</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/invoices">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Current COGS</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/cogs">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Baking List</span>
+      <a class="btn btn-small" href="/kitchen/baking-list">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Chia &amp; Oats Prep</span>
+      <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/chia-oats-prep">Open</a>
+    </div>
     <% if (shop.slug === 'essendon') { %>
       <div class="item-row">
         <span class="item-name">Del Re Orders</span>
