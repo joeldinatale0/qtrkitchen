@@ -637,18 +637,19 @@ function todayMelbourneStr() {
   }).format(new Date());
 }
 
-// Step 1: turn the free-text question into shops + an absolute date range.
-async function parseNaturalSalesQuery(queryText) {
+// Step 1: turn the free-text question into an intent (sales/labour/both) +
+// shops + an absolute date range.
+async function parseNaturalQuery(queryText) {
   const todayStr = todayMelbourneStr();
   const shopList = Object.entries(SHOP_INTEGRATIONS)
     .map(([slug, c]) => `${slug} = ${c.displayName}`)
     .join(", ");
 
-  const system = `You convert a cafe owner's plain-English sales question into strict JSON, nothing else.
+  const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Return exactly this JSON shape:
-{"shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being searched for and over what period"}
-Rules: resolve relative dates ("past 30 days", "last quarter", "this month") into absolute dates; the end date must not be later than yesterday (${todayStr} is today and today's trading is incomplete); if no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above.`;
+{"intent": "sales" or "labour" or "both", "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period"}
+Rules: "intent" is "sales" for questions about what sold, revenue, items, drinks, food; "labour" for questions about hours worked, staff, employees, shifts, wages, rostering, labour cost; "both" only if the question genuinely asks about both together (e.g. comparing sales to labour cost). Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above.`;
 
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 400 });
   const parsed = extractJson(text);
@@ -668,7 +669,15 @@ Rules: resolve relative dates ("past 30 days", "last quarter", "this month") int
     throw new Error("Could not resolve a valid date range from the question");
   }
 
-  return { shops, start: parsed.start, end: parsed.end, restatedQuestion: parsed.restated_question || queryText };
+  const intent = ["sales", "labour", "both"].includes(parsed.intent) ? parsed.intent : "sales";
+
+  return {
+    intent,
+    shops,
+    start: parsed.start,
+    end: parsed.end,
+    restatedQuestion: parsed.restated_question || queryText,
+  };
 }
 
 // Pull every distinct name+variation sold by each shop in the window, with
@@ -759,8 +768,7 @@ Only include rows in "matched" that genuinely belong in scope for the question �
   };
 }
 
-async function buildNaturalSalesSearch(queryText) {
-  const parse = await parseNaturalSalesQuery(queryText);
+async function buildSalesSearchPart(queryText, parse) {
   const { perShopItems, errors } = await fetchDistinctItemsForShops(parse.shops, parse.start, parse.end);
   const classification = await classifySalesItems(queryText, perShopItems);
 
@@ -795,10 +803,6 @@ async function buildNaturalSalesSearch(queryText) {
   }
 
   return {
-    queryText,
-    restatedQuestion: parse.restatedQuestion,
-    start: parse.start,
-    end: parse.end,
     groupDimensionLabel: classification.groupDimensionLabel,
     ranked: classification.rank,
     note: classification.note,
@@ -807,28 +811,23 @@ async function buildNaturalSalesSearch(queryText) {
   };
 }
 
-function formatNaturalSalesSearchEmail(result) {
-  const lines = [
-    `Sales Search — "${result.queryText}"`,
-    result.restatedQuestion,
-    `Period: ${result.start} to ${result.end}`,
-    ``,
-  ];
+function formatSalesPart(sales) {
+  const lines = [`SALES`, ``];
 
-  for (const [slug, msg] of Object.entries(result.errors)) lines.push(`(${slug}: ${msg})`);
-  if (Object.keys(result.errors).length) lines.push(``);
+  for (const [slug, msg] of Object.entries(sales.errors)) lines.push(`(${slug}: ${msg})`);
+  if (Object.keys(sales.errors).length) lines.push(``);
 
-  if (result.note) lines.push(`Note: ${result.note}`, ``);
+  if (sales.note) lines.push(`Note: ${sales.note}`, ``);
 
-  if (result.groups.length === 0) {
+  if (sales.groups.length === 0) {
     lines.push(`No matching sales found for this question in that period.`);
   } else {
     let grandQty = 0;
     let grandRevenue = 0;
-    result.groups.forEach((g, i) => {
+    sales.groups.forEach((g, i) => {
       grandQty += g.totalQty;
       grandRevenue += g.totalRevenue;
-      const rank = result.ranked ? `${i + 1}. ` : ``;
+      const rank = sales.ranked ? `${i + 1}. ` : ``;
       lines.push(`${rank}${g.label} — ${g.totalQty} sold — ${money(g.totalRevenue)}`);
       for (const bucket of Object.values(g.perShop)) {
         lines.push(`    ${bucket.shopName}: ${bucket.qty} — ${money(bucket.revenue)}`);
@@ -838,8 +837,278 @@ function formatNaturalSalesSearchEmail(result) {
     lines.push(`Grand total: ${grandQty} sold — ${money(grandRevenue)}`);
   }
 
+  return lines.join("\n");
+}
+
+// ---- Labour side of natural-language search --------------------------
+// Tanda is one org covering every shop (just different department_ids per
+// location), and /shifts and /users return the whole org in one call —
+// much cheaper than the sales side's per-shop Square pagination.
+async function fetchTandaUsers() {
+  const res = await fetch(`${TANDA_API_BASE}/users`, { headers: tandaHeaders() });
+  if (!res.ok) throw new Error(`Tanda users failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function fetchTandaShiftsRange(startDateStr, endDateStr) {
+  const res = await fetch(`${TANDA_API_BASE}/shifts?from=${startDateStr}&to=${endDateStr}`, {
+    headers: tandaHeaders(),
+  });
+  if (!res.ok) throw new Error(`Tanda shifts failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+// Hours worked for one shift, minus its recorded break. A still-open shift
+// (no finish time) is only valid for TODAY (still clocked in) — an older
+// shift with no finish is an unrecorded clock-out, not real data, so it is
+// excluded rather than guessed at.
+function shiftHours(shift, actualTodayStr, now) {
+  if (!shift.start) return 0;
+  const start = new Date(shift.start * 1000);
+  let finish;
+  if (shift.finish) {
+    finish = new Date(shift.finish * 1000);
+  } else if (shift.date === actualTodayStr) {
+    finish = now;
+  } else {
+    return null;
+  }
+  if (finish <= start) return 0;
+  const breakHours = (Number(shift.break_length) || 0) / 60;
+  return Math.max((finish - start) / 3600000 - breakHours, 0);
+}
+
+async function fetchLabourDataForShops(shopSlugs, startDateStr, endDateStr) {
+  const actualTodayStr = todayMelbourneStr();
+  const now = new Date();
+  const errors = {};
+
+  const deptSets = {};
+  for (const slug of shopSlugs) {
+    const config = SHOP_INTEGRATIONS[slug];
+    if (!config) continue;
+    if (!process.env.TANDA_ACCESS_TOKEN) {
+      errors[slug] = "Tanda not connected";
+      continue;
+    }
+    try {
+      deptSets[slug] = await fetchTandaDepartmentIds(config.tandaLocationId);
+    } catch (err) {
+      errors[slug] = err.message;
+    }
+  }
+
+  let shifts = [];
+  let users = [];
+  try {
+    [shifts, users] = await Promise.all([fetchTandaShiftsRange(startDateStr, endDateStr), fetchTandaUsers()]);
+  } catch (err) {
+    errors["_fetch"] = err.message;
+  }
+
+  const userNames = {};
+  for (const u of users) userNames[u.id] = (u.name || "").trim() || `Employee #${u.id}`;
+
+  const rows = [];
+  let incompleteCount = 0;
+  for (const shift of shifts) {
+    for (const [slug, deptIds] of Object.entries(deptSets)) {
+      if (!deptIds.has(shift.department_id)) continue;
+      const hours = shiftHours(shift, actualTodayStr, now);
+      if (hours === null) {
+        incompleteCount++;
+        continue;
+      }
+      rows.push({
+        shopSlug: slug,
+        shopName: SHOP_INTEGRATIONS[slug].displayName,
+        userId: shift.user_id,
+        userName: userNames[shift.user_id] || `Employee #${shift.user_id}`,
+        date: shift.date,
+        hours,
+      });
+    }
+  }
+
+  // Tanda's live wage tracker only ever reports TODAY's cumulative $ cost,
+  // shop-level only (never a past date, never per employee) — so $ cost is
+  // only ever included when the requested range covers today.
+  const costToday = {};
+  if (startDateStr <= actualTodayStr && actualTodayStr <= endDateStr) {
+    await Promise.all(
+      shopSlugs.map(async (slug) => {
+        const config = SHOP_INTEGRATIONS[slug];
+        if (!config || !process.env.TANDA_ACCESS_TOKEN) return;
+        try {
+          costToday[slug] = await fetchTandaLiveLabourCost(config.tandaLocationId);
+        } catch (err) {
+          // Hours are still useful without today's $ cost — not fatal.
+        }
+      })
+    );
+  }
+
+  const rosterIds = new Set(rows.map((r) => String(r.userId)));
+  const roster = Object.entries(userNames)
+    .filter(([id]) => rosterIds.has(String(id)))
+    .map(([id, name]) => ({ id, name }));
+
+  return { rows, roster, costToday, incompleteCount, errors };
+}
+
+// Step 2 (labour): show Claude the real roster of people who actually
+// worked in the period, and have it resolve any named person against it
+// and decide how to group/rank — the hour math itself stays in code.
+async function classifyLabourQuery(queryText, roster) {
+  const rosterLines = roster.map((r) => `${r.id}|${r.name}`).join("\n");
+
+  const system = `You are helping interpret a cafe owner's labour/staffing question: "${queryText}"
+Below is the roster of employees who actually worked in the period already resolved for this question: id|name.
+Return ONLY this JSON shape:
+{
+  "group_by": "employee" or "day" or "shop" or "none",
+  "rank": true or false (true only if explicitly asked to rank/order by most/least/highest/lowest),
+  "rank_order": "desc" or "asc",
+  "employee_filter_ids": ["id", ...] (ids of employees the question specifically names, matched by name even with a slightly different spelling — empty array if the question is about everyone, not a specific person),
+  "note": "short caveat if any name was ambiguous, else null"
+}`;
+
+  const text = await callClaude({
+    system,
+    userText: rosterLines || "(no one worked in this period)",
+    model: "claude-haiku-5-5",
+    maxTokens: 800,
+  });
+  const parsed = extractJson(text);
   return {
-    subject: `Sales Search — ${result.restatedQuestion}`.slice(0, 200),
+    groupBy: ["employee", "day", "shop"].includes(parsed.group_by) ? parsed.group_by : "none",
+    rank: Boolean(parsed.rank),
+    rankOrder: parsed.rank_order === "asc" ? "asc" : "desc",
+    employeeFilterIds: Array.isArray(parsed.employee_filter_ids) ? parsed.employee_filter_ids.map(String) : [],
+    note: parsed.note || null,
+  };
+}
+
+async function buildLabourSearchPart(queryText, parse) {
+  const { rows, roster, costToday, incompleteCount, errors } = await fetchLabourDataForShops(
+    parse.shops,
+    parse.start,
+    parse.end
+  );
+  const classification = await classifyLabourQuery(queryText, roster);
+
+  let filteredRows = rows;
+  if (classification.employeeFilterIds.length) {
+    const idSet = new Set(classification.employeeFilterIds);
+    filteredRows = rows.filter((r) => idSet.has(String(r.userId)));
+  }
+
+  const keyFor = (r) => {
+    if (classification.groupBy === "employee") return r.userName;
+    if (classification.groupBy === "day") return r.date;
+    if (classification.groupBy === "shop") return r.shopName;
+    return "Total";
+  };
+
+  const groups = {};
+  for (const r of filteredRows) {
+    const key = keyFor(r);
+    if (!groups[key]) groups[key] = { label: key, totalHours: 0 };
+    groups[key].totalHours += r.hours;
+  }
+
+  let groupList = Object.values(groups);
+  if (classification.rank) {
+    groupList.sort((a, b) =>
+      classification.rankOrder === "asc" ? a.totalHours - b.totalHours : b.totalHours - a.totalHours
+    );
+  } else {
+    groupList.sort((a, b) => b.totalHours - a.totalHours);
+  }
+
+  return { ranked: classification.rank, note: classification.note, groups: groupList, costToday, incompleteCount, errors };
+}
+
+function formatLabourPart(labour) {
+  const lines = [`LABOUR`, ``];
+
+  for (const [slug, msg] of Object.entries(labour.errors)) lines.push(`(${slug}: ${msg})`);
+  if (Object.keys(labour.errors).length) lines.push(``);
+
+  if (labour.incompleteCount) {
+    lines.push(
+      `(${labour.incompleteCount} past shift(s) had no clock-out recorded in Tanda — excluded from hours.)`,
+      ``
+    );
+  }
+  if (labour.note) lines.push(`Note: ${labour.note}`, ``);
+
+  if (labour.groups.length === 0) {
+    lines.push(`No matching labour hours found for this question in that period.`);
+  } else {
+    let grandHours = 0;
+    labour.groups.forEach((g, i) => {
+      grandHours += g.totalHours;
+      const rank = labour.ranked ? `${i + 1}. ` : ``;
+      lines.push(`${rank}${g.label} — ${g.totalHours.toFixed(2)} hrs`);
+    });
+    lines.push(``, `Total: ${grandHours.toFixed(2)} hrs`);
+  }
+
+  const costEntries = Object.entries(labour.costToday);
+  if (costEntries.length) {
+    lines.push(
+      ``,
+      `Labour $ cost for TODAY only (Tanda only ever reports live cost for the current day, never a past date):`
+    );
+    for (const [slug, cost] of costEntries) {
+      lines.push(`  ${(SHOP_INTEGRATIONS[slug] || {}).displayName || slug}: ${money(cost)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// Single entry point for the free-text search box — resolves intent once,
+// then runs the sales and/or labour pipeline(s) it calls for.
+async function buildNaturalSearch(queryText) {
+  const parse = await parseNaturalQuery(queryText);
+  const result = {
+    queryText,
+    restatedQuestion: parse.restatedQuestion,
+    start: parse.start,
+    end: parse.end,
+  };
+
+  if (parse.intent === "labour") {
+    result.labour = await buildLabourSearchPart(queryText, parse);
+  } else if (parse.intent === "sales") {
+    result.sales = await buildSalesSearchPart(queryText, parse);
+  } else {
+    const [sales, labour] = await Promise.all([
+      buildSalesSearchPart(queryText, parse),
+      buildLabourSearchPart(queryText, parse),
+    ]);
+    result.sales = sales;
+    result.labour = labour;
+  }
+
+  return result;
+}
+
+function formatNaturalSearchEmail(result) {
+  const lines = [
+    `Search — "${result.queryText}"`,
+    result.restatedQuestion,
+    `Period: ${result.start} to ${result.end}`,
+    ``,
+  ];
+
+  if (result.sales) lines.push(formatSalesPart(result.sales), ``);
+  if (result.labour) lines.push(formatLabourPart(result.labour));
+
+  return {
+    subject: `Search — ${result.restatedQuestion}`.slice(0, 200),
     text: lines.join("\n"),
   };
 }
@@ -925,6 +1194,6 @@ module.exports = {
   buildCookieSalesReport,
   buildItemSalesSearch,
   formatSalesSearchEmail,
-  buildNaturalSalesSearch,
-  formatNaturalSalesSearchEmail,
+  buildNaturalSearch,
+  formatNaturalSearchEmail,
 };

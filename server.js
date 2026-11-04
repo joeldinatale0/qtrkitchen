@@ -17,8 +17,8 @@ const {
   buildCookieSalesReport,
   buildItemSalesSearch,
   formatSalesSearchEmail,
-  buildNaturalSalesSearch,
-  formatNaturalSalesSearchEmail,
+  buildNaturalSearch,
+  formatNaturalSearchEmail,
 } = require("./shop-reports");
 
 const app = express();
@@ -1304,9 +1304,10 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
   }
 });
 
-// Self-service AI sales search — ask any plain-English sales question
-// ("iced drink sales for the last 30 days, ranked highest to lowest") and
-// Claude resolves the date range/shops, looks at the real Square sales for
+// Self-service AI search — ask any plain-English sales OR labour question
+// ("iced drink sales for the last 30 days, ranked highest to lowest",
+// "how many hours did Essendon staff work last week") and Claude resolves
+// the intent/shops/date range, looks at the real Square/Tanda data for
 // that window, and decides what matches and how to group/rank it. Results
 // are emailed (same async pattern as below — a wide search is slow).
 app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
@@ -1319,11 +1320,11 @@ app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res)
   });
 });
 
-// Pulling every item sold across every shop for a wide date range (before
-// Claude narrows it down) is the heaviest thing this app does — running two
-// of these at once is what pushed a Render instance over its memory limit
-// and crashed the whole app. One at a time only.
-let naturalSalesSearchInProgress = false;
+// Pulling every item sold / every shift worked across every shop for a wide
+// date range (before Claude narrows it down) is the heaviest thing this app
+// does — running two of these at once is what pushed a Render instance over
+// its memory limit and crashed the whole app once already. One at a time.
+let naturalSearchInProgress = false;
 
 app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
   const query = (req.body.query || "").trim();
@@ -1344,27 +1345,27 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
   if (!process.env.GMAIL_APP_PASSWORD) {
     return renderWith("GMAIL_APP_PASSWORD is missing — cannot email the results.");
   }
-  if (naturalSalesSearchInProgress) {
+  if (naturalSearchInProgress) {
     return renderWith("Another search is already running — wait a minute for it to finish, then try again.");
   }
 
-  naturalSalesSearchInProgress = true;
-  buildNaturalSalesSearch(query)
+  naturalSearchInProgress = true;
+  buildNaturalSearch(query)
     .then((result) => {
-      const email = formatNaturalSalesSearchEmail(result);
+      const email = formatNaturalSearchEmail(result);
       return sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
     })
-    .then(() => console.log(`Sales search emailed for: "${query}"`))
+    .then(() => console.log(`Search emailed for: "${query}"`))
     .catch((err) => {
-      console.error("Sales search failed:", err.message);
+      console.error("Search failed:", err.message);
       sendEmail({
         to: DAILY_REPORT_EMAIL_TO,
-        subject: `Sales Search failed — "${query}"`,
+        subject: `Search failed — "${query}"`,
         text: `Your search "${query}" could not be completed.\n\nError: ${err.message}`,
-      }).catch((e) => console.error("Sales search failure email also failed:", e.message));
+      }).catch((e) => console.error("Search failure email also failed:", e.message));
     })
     .finally(() => {
-      naturalSalesSearchInProgress = false;
+      naturalSearchInProgress = false;
     });
 
   res.render("kitchen-sales-search", {
@@ -1558,24 +1559,6 @@ app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"
   req.session.destroy(() => {
     res.json({ ok: true, message: "Credentials updated — log in again with the new username and password." });
   });
-});
-
-// TEMP diagnostic — inspect Tanda's /users and /shifts field shapes before
-// wiring up labour search. Removed once that's built.
-app.get("/kitchen/admin/debug-tanda", requireAuth, requireRole("kitchen"), async (req, res) => {
-  try {
-    const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
-    const usersRes = await fetch("https://my.tanda.co/api/v2/users?limit=3", { headers });
-    const usersText = await usersRes.text();
-    const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne" }).format(new Date());
-    const shiftsRes = await fetch(`https://my.tanda.co/api/v2/shifts?from=${todayStr}&to=${todayStr}`, { headers });
-    const shiftsText = await shiftsRes.text();
-    res.type("text/plain").send(
-      `USERS (${usersRes.status}):\n${usersText.slice(0, 2000)}\n\nSHIFTS (${shiftsRes.status}):\n${shiftsText.slice(0, 2000)}`
-    );
-  } catch (err) {
-    res.status(500).type("text/plain").send(err.message);
-  }
 });
 
 // ---------- Kitchen: manage par levels per shop ----------

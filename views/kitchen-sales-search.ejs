@@ -1,11 +1,11 @@
-<%- include('partials/head', { title: "Sales Search — QTR Kitchen Ordering" }) %>
+<%- include('partials/head', { title: "Sales & Labour Search — QTR Kitchen Ordering" }) %>
 <%- include('partials/topbar') %>
 
 <div class="container">
   <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
-  <h1>Sales Search</h1>
+  <h1>Sales & Labour Search</h1>
   <p class="subtitle">
-    Ask any sales question in plain English. Results are emailed to you — a wide search can take a few minutes to pull.
+    Ask any sales or labour question in plain English. Results are emailed to you — a wide search can take a few minutes to pull.
   </p>
 
   <% if (!aiConfigured) { %>
@@ -34,6 +34,9 @@
       <li>Iced drinks sales for the past 30 days, ranked highest to lowest, across all shops</li>
       <li>How did Wild Blanc sell at Essendon over the last 2 weeks?</li>
       <li>Cookie sales at Highpoint for October, broken down by flavour</li>
+      <li>How many labour hours did Essendon use last week, by day?</li>
+      <li>Rank every shop's staff by hours worked this month</li>
+      <li>Today's labour cost at Highpoint so far</li>
     </ul>
   </div>
 
