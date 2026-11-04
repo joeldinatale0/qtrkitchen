@@ -1560,6 +1560,24 @@ app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"
   });
 });
 
+// TEMP diagnostic — inspect Tanda's /users and /shifts field shapes before
+// wiring up labour search. Removed once that's built.
+app.get("/kitchen/admin/debug-tanda", requireAuth, requireRole("kitchen"), async (req, res) => {
+  try {
+    const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
+    const usersRes = await fetch("https://my.tanda.co/api/v2/users?limit=3", { headers });
+    const usersText = await usersRes.text();
+    const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne" }).format(new Date());
+    const shiftsRes = await fetch(`https://my.tanda.co/api/v2/shifts?from=${todayStr}&to=${todayStr}`, { headers });
+    const shiftsText = await shiftsRes.text();
+    res.type("text/plain").send(
+      `USERS (${usersRes.status}):\n${usersText.slice(0, 2000)}\n\nSHIFTS (${shiftsRes.status}):\n${shiftsText.slice(0, 2000)}`
+    );
+  } catch (err) {
+    res.status(500).type("text/plain").send(err.message);
+  }
+});
+
 // ---------- Kitchen: manage par levels per shop ----------
 
 app.get("/kitchen/pars", requireAuth, requireRole("kitchen"), (req, res) => {
