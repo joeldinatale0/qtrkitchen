@@ -10,7 +10,13 @@ const nodemailer = require("nodemailer");
 const db = require("./db");
 const { buildWeeklySummaryPdf } = require("./invoice-pdf");
 const { COGS_BY_SHOP } = require("./cogs-data");
-const { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport } = require("./shop-reports");
+const {
+  SHOP_INTEGRATIONS,
+  buildDailyShopReport,
+  formatDailyReportEmail,
+  buildCookieSalesReport,
+  buildItemSalesSearch,
+} = require("./shop-reports");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1292,6 +1298,71 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Self-service ad hoc item sales search — pick shops, item name(s) to
+// search for, and a date range, and see live Square sales for exactly
+// that, without needing a one-off script written each time.
+app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const allShopSlugs = Object.keys(SHOP_INTEGRATIONS);
+  const selectedShops = [].concat(req.query.shops || []).filter((s) => allShopSlugs.includes(s));
+  const termsRaw = (req.query.terms || "").trim();
+  const start = req.query.start || "";
+  const end = req.query.end || "";
+
+  const shopOptions = allShopSlugs.map((slug) => ({ slug, name: SHOP_INTEGRATIONS[slug].displayName }));
+
+  const hasQuery = termsRaw && start && end && selectedShops.length > 0;
+  if (!hasQuery) {
+    return res.render("kitchen-sales-search", {
+      shopOptions,
+      selectedShops: selectedShops.length ? selectedShops : allShopSlugs,
+      termsRaw,
+      start,
+      end,
+      result: null,
+      error: null,
+    });
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+    return res.render("kitchen-sales-search", {
+      shopOptions,
+      selectedShops,
+      termsRaw,
+      start,
+      end,
+      result: null,
+      error: "Pick a valid start and end date (start must be before end).",
+    });
+  }
+
+  try {
+    const terms = termsRaw
+      .split(/[\n,]/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const result = await buildItemSalesSearch(selectedShops, terms, start, end);
+    res.render("kitchen-sales-search", {
+      shopOptions,
+      selectedShops,
+      termsRaw,
+      start,
+      end,
+      result,
+      error: null,
+    });
+  } catch (err) {
+    res.render("kitchen-sales-search", {
+      shopOptions,
+      selectedShops,
+      termsRaw,
+      start,
+      end,
+      result: null,
+      error: err.message,
+    });
   }
 });
 

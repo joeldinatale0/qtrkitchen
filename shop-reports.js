@@ -462,6 +462,88 @@ async function buildCookieSalesReport(weeks = 8) {
   return results;
 }
 
+function normalizeSearchText(s) {
+  return (s || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// Ad hoc sales search: for each search term, across each selected shop,
+// every distinct Square line-item name (not collapsed) whose normalized
+// name contains the normalized term, with quantity and revenue. Shown as
+// a raw breakdown rather than one auto-merged total — catalog naming is
+// inconsistent between shops (e.g. "Golden Crunch" vs "Iced Golden
+// Crunch"), so the admin reviewing the breakdown decides what to include.
+async function buildItemSalesSearch(shopSlugs, searchTerms, startDateStr, endDateStr) {
+  const { startUtc } = melbourneDayRangeUtc(startDateStr);
+  const { endUtc } = melbourneDayRangeUtc(endDateStr);
+
+  const terms = searchTerms.map((t) => ({ raw: t, norm: normalizeSearchText(t) })).filter((t) => t.norm);
+
+  const perTerm = {};
+  for (const t of terms) perTerm[t.raw] = { perShop: {}, grandTotalQty: 0, grandTotalRevenue: 0 };
+
+  const errors = {};
+
+  for (const slug of shopSlugs) {
+    const config = SHOP_INTEGRATIONS[slug];
+    if (!config) continue;
+    if (!process.env[config.squareTokenEnvVar]) {
+      errors[slug] = "Square not connected";
+      continue;
+    }
+
+    let orders;
+    try {
+      orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
+    } catch (err) {
+      errors[slug] = err.message;
+      continue;
+    }
+
+    // name+variation -> { name, variation, qty, revenue }
+    const rowsByKey = {};
+    for (const order of orders) {
+      for (const li of order.line_items || []) {
+        const norm = normalizeSearchText(li.name);
+        const revenue = (li.total_money?.amount || 0) / 100;
+        const qty = Number(li.quantity) || 0;
+        for (const t of terms) {
+          if (!norm.includes(t.norm)) continue;
+          const key = `${li.name}|${li.variation_name || ""}`;
+          if (!rowsByKey[key]) {
+            rowsByKey[key] = { name: (li.name || "").trim(), variation: li.variation_name || "", qty: 0, revenue: 0 };
+          }
+          rowsByKey[key].qty += qty;
+          rowsByKey[key].revenue += revenue;
+
+          if (!perTerm[t.raw].perShop[slug]) {
+            perTerm[t.raw].perShop[slug] = { shopName: config.displayName, rows: {}, subtotalQty: 0, subtotalRevenue: 0 };
+          }
+          const shopBucket = perTerm[t.raw].perShop[slug];
+          if (!shopBucket.rows[key]) {
+            shopBucket.rows[key] = { name: (li.name || "").trim(), variation: li.variation_name || "", qty: 0, revenue: 0 };
+          }
+          shopBucket.rows[key].qty += qty;
+          shopBucket.rows[key].revenue += revenue;
+          shopBucket.subtotalQty += qty;
+          shopBucket.subtotalRevenue += revenue;
+          perTerm[t.raw].grandTotalQty += qty;
+          perTerm[t.raw].grandTotalRevenue += revenue;
+        }
+      }
+    }
+  }
+
+  // Flatten the rows maps into arrays, sorted by qty descending.
+  for (const t of terms) {
+    for (const slug of Object.keys(perTerm[t.raw].perShop)) {
+      const bucket = perTerm[t.raw].perShop[slug];
+      bucket.rows = Object.values(bucket.rows).sort((a, b) => b.qty - a.qty);
+    }
+  }
+
+  return { startDateStr, endDateStr, terms: terms.map((t) => t.raw), perTerm, errors };
+}
+
 function money(n) {
   return `$${n.toFixed(2)}`;
 }
@@ -540,4 +622,10 @@ function formatDailyReportEmail(report) {
   return lines.join("\n");
 }
 
-module.exports = { SHOP_INTEGRATIONS, buildDailyShopReport, formatDailyReportEmail, buildCookieSalesReport };
+module.exports = {
+  SHOP_INTEGRATIONS,
+  buildDailyShopReport,
+  formatDailyReportEmail,
+  buildCookieSalesReport,
+  buildItemSalesSearch,
+};
