@@ -662,10 +662,10 @@ Rules for "domains" (include every one the question genuinely touches, usually j
 - "sales": what sold, revenue, items, drinks, food.
 - "labour": hours worked, staff, employees, shifts, wages, rostering, labour cost.
 - "cash": EOD cash sheet / till reconciliation data — till counts, cash vs EFTPOS vs Uber sales recorded at close of day, discrepancies, float.
-- "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) tracked as a trend across multiple days — NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
-Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least.`;
+- "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) — use this for labour % or $ labour cost on ANY day that is not today, even a single day, since live labour cost only exists for today; also use it for a multi-day trend of these numbers. NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
+Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
 
-  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 500 });
+  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
   const parsed = extractJson(text, "parseNaturalQuery");
 
   const allSlugs = Object.keys(SHOP_INTEGRATIONS);
@@ -1208,8 +1208,23 @@ function formatReportPart(report) {
   return lines.join("\n");
 }
 
+// Final step: hand the original question + the real retrieved numbers to
+// Claude and have it actually answer — including any arithmetic or
+// hypothetical ("what if sales were $2k higher") the question needs. This
+// is what makes genuinely complex questions work rather than just lookups:
+// the data below is already real and grounded, so the model only has to
+// reason over it, never invent a figure.
+async function synthesizeAnswer(queryText, dataText) {
+  const system = `A cafe owner asked: "${queryText}"
+Below is the real sales/labour/cash/report data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below; if the data needed to answer is not present, say so plainly instead of guessing.
+Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
+
+  return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
+}
+
 // Single entry point for the free-text search box — resolves which data
-// source(s) the question needs once, then runs each matching pipeline.
+// source(s) the question needs once, runs each matching pipeline, then
+// synthesizes a direct answer on top of whatever real data came back.
 async function buildNaturalSearch(db, queryText) {
   const parse = await parseNaturalQuery(queryText);
   const result = {
@@ -1226,6 +1241,18 @@ async function buildNaturalSearch(db, queryText) {
   if (parse.domains.includes("report")) result.report = buildReportSearchPart(db, parse);
   await Promise.all(jobs);
 
+  const dataParts = [];
+  if (result.sales) dataParts.push(formatSalesPart(result.sales));
+  if (result.labour) dataParts.push(formatLabourPart(result.labour));
+  if (result.cash) dataParts.push(formatCashPart(result.cash));
+  if (result.report) dataParts.push(formatReportPart(result.report));
+
+  try {
+    result.answer = await synthesizeAnswer(queryText, dataParts.join("\n\n"));
+  } catch (err) {
+    result.answer = null; // the raw breakdown below still answers the question even if this fails
+  }
+
   return result;
 }
 
@@ -1236,6 +1263,10 @@ function formatNaturalSearchEmail(result) {
     `Period: ${result.start} to ${result.end}`,
     ``,
   ];
+
+  if (result.answer) {
+    lines.push(`ANSWER`, ``, result.answer.trim(), ``, `---`, ``, `Supporting data:`, ``);
+  }
 
   if (result.sales) lines.push(formatSalesPart(result.sales), ``);
   if (result.labour) lines.push(formatLabourPart(result.labour), ``);
