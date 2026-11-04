@@ -1187,7 +1187,16 @@ function formatReportPart(report) {
 
   let rows = report.rows.map((r) => ({ ...r, shopName: (SHOP_INTEGRATIONS[r.shop_slug] || {}).displayName || r.shop_slug }));
   const metric = report.focusMetric ? REPORT_METRICS[report.focusMetric] : null;
-  const fmt = (r, m) => (m.cents ? money(r[m.col] / 100) : m.pct ? `${(r[m.col] || 0).toFixed(1)}%` : `${r[m.col]}`);
+  // null/undefined means genuinely not available (e.g. Tanda only ever
+  // reports live $ labour cost for TODAY, never a backfilled past day) —
+  // `null / 100` and `null || 0` both silently evaluate to 0 in JS, which
+  // would otherwise print a real $0.00 / 0.0% instead of "not available".
+  const fmt = (r, m) => {
+    const v = r[m.col];
+    if (v === null || v === undefined) return "n/a";
+    return m.cents ? money(v / 100) : m.pct ? `${v.toFixed(1)}%` : `${v}`;
+  };
+  const pctOrNa = (v) => (v === null || v === undefined ? "n/a" : `${v.toFixed(1)}%`);
 
   if (report.rank && metric) {
     rows.sort((a, b) => (report.rankOrder === "asc" ? a[metric.col] - b[metric.col] : b[metric.col] - a[metric.col]));
@@ -1200,8 +1209,11 @@ function formatReportPart(report) {
     } else {
       lines.push(`${rank}${r.shopName} — ${r.report_date}`);
       lines.push(
-        `    Net sales: ${money(r.net_sales_cents / 100)}  Labour %: ${(r.labour_pct || 0).toFixed(1)}%  COGS %: ${(r.cogs_pct || 0).toFixed(1)}%  Prime cost %: ${(r.prime_cost_pct || 0).toFixed(1)}%`
+        `    Net sales: ${money(r.net_sales_cents / 100)}  Labour %: ${pctOrNa(r.labour_pct)}  COGS %: ${pctOrNa(r.cogs_pct)}  Prime cost %: ${pctOrNa(r.prime_cost_pct)}`
       );
+      if (r.labour_cost_cents === null || r.labour_cost_cents === undefined) {
+        lines.push(`    ($ labour cost not available for this day — Tanda only reports live cost for today, never a past date)`);
+      }
     }
   });
 
@@ -1216,7 +1228,7 @@ function formatReportPart(report) {
 // reason over it, never invent a figure.
 async function synthesizeAnswer(queryText, dataText) {
   const system = `A cafe owner asked: "${queryText}"
-Below is the real sales/labour/cash/report data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below; if the data needed to answer is not present, say so plainly instead of guessing.
+Below is the real sales/labour/cash/report data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
   return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
