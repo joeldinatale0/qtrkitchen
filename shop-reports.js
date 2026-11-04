@@ -483,19 +483,28 @@ async function buildItemSalesSearch(shopSlugs, searchTerms, startDateStr, endDat
 
   const errors = {};
 
-  for (const slug of shopSlugs) {
+  // Fetch every shop's orders in parallel rather than one at a time — this
+  // is the slow part (Square pagination over a wide date range), and there
+  // is no reason to serialize it across shops.
+  const fetched = await Promise.all(
+    shopSlugs.map(async (slug) => {
+      const config = SHOP_INTEGRATIONS[slug];
+      if (!config) return { slug, orders: null };
+      if (!process.env[config.squareTokenEnvVar]) return { slug, orders: null, error: "Square not connected" };
+      try {
+        const orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
+        return { slug, orders };
+      } catch (err) {
+        return { slug, orders: null, error: err.message };
+      }
+    })
+  );
+
+  for (const { slug, orders, error } of fetched) {
     const config = SHOP_INTEGRATIONS[slug];
     if (!config) continue;
-    if (!process.env[config.squareTokenEnvVar]) {
-      errors[slug] = "Square not connected";
-      continue;
-    }
-
-    let orders;
-    try {
-      orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
-    } catch (err) {
-      errors[slug] = err.message;
+    if (error) {
+      errors[slug] = error;
       continue;
     }
 
@@ -546,6 +555,39 @@ async function buildItemSalesSearch(shopSlugs, searchTerms, startDateStr, endDat
 
 function money(n) {
   return `$${n.toFixed(2)}`;
+}
+
+function formatSalesSearchEmail(result) {
+  const lines = [`Sales Search — ${result.startDateStr} to ${result.endDateStr}`, ``];
+
+  for (const [slug, msg] of Object.entries(result.errors)) {
+    lines.push(`(${slug}: ${msg})`);
+  }
+  if (Object.keys(result.errors).length) lines.push(``);
+
+  for (const term of result.terms) {
+    const t = result.perTerm[term];
+    lines.push(`"${term}"`, ``);
+
+    const shopBuckets = Object.values(t.perShop);
+    if (shopBuckets.length === 0) {
+      lines.push(`  No matches.`, ``);
+      continue;
+    }
+
+    for (const bucket of shopBuckets) {
+      lines.push(`  ${bucket.shopName}`);
+      for (const r of bucket.rows) {
+        const label = r.variation ? `${r.name} (${r.variation})` : r.name;
+        lines.push(`    ${r.qty} x ${label} — ${money(r.revenue)}`);
+      }
+      lines.push(`    Subtotal: ${bucket.subtotalQty} — ${money(bucket.subtotalRevenue)}`, ``);
+    }
+
+    lines.push(`  Grand total across shops: ${t.grandTotalQty} sold — ${money(t.grandTotalRevenue)}`, ``, ``);
+  }
+
+  return { subject: `Sales Search — ${result.terms.join(", ")} — ${result.startDateStr} to ${result.endDateStr}`, text: lines.join("\n") };
 }
 
 function hourLabel(h) {
@@ -628,4 +670,5 @@ module.exports = {
   formatDailyReportEmail,
   buildCookieSalesReport,
   buildItemSalesSearch,
+  formatSalesSearchEmail,
 };

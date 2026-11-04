@@ -16,6 +16,7 @@ const {
   formatDailyReportEmail,
   buildCookieSalesReport,
   buildItemSalesSearch,
+  formatSalesSearchEmail,
 } = require("./shop-reports");
 
 const app = express();
@@ -1304,66 +1305,80 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
 // Self-service ad hoc item sales search — pick shops, item name(s) to
 // search for, and a date range, and see live Square sales for exactly
 // that, without needing a one-off script written each time.
-app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), async (req, res) => {
+app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
   const allShopSlugs = Object.keys(SHOP_INTEGRATIONS);
-  const selectedShops = [].concat(req.query.shops || []).filter((s) => allShopSlugs.includes(s));
-  const termsRaw = (req.query.terms || "").trim();
-  const start = req.query.start || "";
-  const end = req.query.end || "";
-
   const shopOptions = allShopSlugs.map((slug) => ({ slug, name: SHOP_INTEGRATIONS[slug].displayName }));
 
-  const hasQuery = termsRaw && start && end && selectedShops.length > 0;
-  if (!hasQuery) {
-    return res.render("kitchen-sales-search", {
+  res.render("kitchen-sales-search", {
+    shopOptions,
+    selectedShops: allShopSlugs,
+    termsRaw: "",
+    start: "",
+    end: "",
+    queued: false,
+    error: null,
+    reportsEmail: DAILY_REPORT_EMAIL_TO,
+  });
+});
+
+// A wide date range against a high-volume item can take minutes of Square
+// pagination — too slow to hold a browser tab open waiting on it (and
+// liable to hit a gateway timeout and just look frozen). So this responds
+// immediately with a confirmation and runs the actual search in the
+// background, emailing the result when it is done.
+app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
+  const allShopSlugs = Object.keys(SHOP_INTEGRATIONS);
+  const selectedShops = [].concat(req.body.shops || []).filter((s) => allShopSlugs.includes(s));
+  const termsRaw = (req.body.terms || "").trim();
+  const start = req.body.start || "";
+  const end = req.body.end || "";
+  const shopOptions = allShopSlugs.map((slug) => ({ slug, name: SHOP_INTEGRATIONS[slug].displayName }));
+
+  const renderWith = (error) =>
+    res.render("kitchen-sales-search", {
       shopOptions,
-      selectedShops: selectedShops.length ? selectedShops : allShopSlugs,
+      selectedShops,
       termsRaw,
       start,
       end,
-      result: null,
-      error: null,
+      queued: false,
+      error,
+      reportsEmail: DAILY_REPORT_EMAIL_TO,
     });
-  }
 
+  if (!termsRaw || !start || !end || selectedShops.length === 0) {
+    return renderWith("Fill in at least one item name, pick a shop, and a date range.");
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
-    return res.render("kitchen-sales-search", {
-      shopOptions,
-      selectedShops,
-      termsRaw,
-      start,
-      end,
-      result: null,
-      error: "Pick a valid start and end date (start must be before end).",
-    });
+    return renderWith("Pick a valid start and end date (start must be before end).");
+  }
+  if (!process.env.GMAIL_APP_PASSWORD) {
+    return renderWith("GMAIL_APP_PASSWORD is missing — cannot email the results.");
   }
 
-  try {
-    const terms = termsRaw
-      .split(/[\n,]/)
-      .map((t) => t.trim())
-      .filter(Boolean);
-    const result = await buildItemSalesSearch(selectedShops, terms, start, end);
-    res.render("kitchen-sales-search", {
-      shopOptions,
-      selectedShops,
-      termsRaw,
-      start,
-      end,
-      result,
-      error: null,
-    });
-  } catch (err) {
-    res.render("kitchen-sales-search", {
-      shopOptions,
-      selectedShops,
-      termsRaw,
-      start,
-      end,
-      result: null,
-      error: err.message,
-    });
-  }
+  const terms = termsRaw
+    .split(/[\n,]/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  buildItemSalesSearch(selectedShops, terms, start, end)
+    .then((result) => {
+      const email = formatSalesSearchEmail(result);
+      return sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
+    })
+    .then(() => console.log(`Sales search emailed for terms: ${terms.join(", ")}`))
+    .catch((err) => console.error("Sales search failed:", err.message));
+
+  res.render("kitchen-sales-search", {
+    shopOptions,
+    selectedShops,
+    termsRaw,
+    start,
+    end,
+    queued: true,
+    error: null,
+    reportsEmail: DAILY_REPORT_EMAIL_TO,
+  });
 });
 
 // Manual test send for the 4pm cookie baking list — ignores the hour gate

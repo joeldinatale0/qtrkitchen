@@ -4,9 +4,21 @@
 <div class="container">
   <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
   <h1>Sales Search</h1>
-  <p class="subtitle">Search live Square sales by item name, across any shops, for any date range.</p>
+  <p class="subtitle">
+    Search live Square sales by item name, across any shops, for any date range. Results are emailed to you —
+    a wide search can take a few minutes to pull.
+  </p>
 
-  <form method="GET" action="/kitchen/sales-search" class="card">
+  <% if (queued) { %>
+    <div class="success-banner">
+      Search started — results will be emailed shortly to <%= reportsEmail %>.
+    </div>
+  <% } %>
+  <% if (error) { %>
+    <p class="error"><%= error %></p>
+  <% } %>
+
+  <form method="POST" action="/kitchen/sales-search" class="card">
     <label for="terms">Item name(s) — one per line (matches anything containing this text)</label>
     <textarea id="terms" name="terms" rows="4" placeholder="e.g.&#10;Wild Blanc&#10;Mont Blanc&#10;Strawberry Matcha"><%= termsRaw %></textarea>
 
@@ -35,57 +47,6 @@
 
     <button class="btn btn-filled" type="submit" style="margin-top: 20px;">Search</button>
   </form>
-
-  <% if (error) { %>
-    <p class="error"><%= error %></p>
-  <% } %>
-
-  <% if (result) { %>
-    <% if (Object.keys(result.errors).length > 0) { %>
-      <p class="error">
-        <% Object.entries(result.errors).forEach(function([slug, msg]) { %>
-          <%= slug %>: <%= msg %><br>
-        <% }) %>
-      </p>
-    <% } %>
-
-    <% result.terms.forEach(function(term) { %>
-      <% const t = result.perTerm[term]; %>
-      <h2>"<%= term %>" — <%= result.startDateStr %> to <%= result.endDateStr %></h2>
-
-      <% if (Object.keys(t.perShop).length === 0) { %>
-        <div class="card"><p class="muted" style="margin: 0;">No matches.</p></div>
-      <% } else { %>
-        <% Object.values(t.perShop).forEach(function(shopBucket) { %>
-          <div class="card">
-            <h3 style="margin-top: 0;"><%= shopBucket.shopName %></h3>
-            <table>
-              <thead>
-                <tr><th>Item</th><th>Qty</th><th>Revenue</th></tr>
-              </thead>
-              <tbody>
-                <% shopBucket.rows.forEach(function(r) { %>
-                  <tr>
-                    <td><%= r.name %><% if (r.variation) { %> <span class="item-unit">(<%= r.variation %>)</span><% } %></td>
-                    <td><%= r.qty %></td>
-                    <td>$<%= r.revenue.toFixed(2) %></td>
-                  </tr>
-                <% }) %>
-                <tr style="font-weight: 700;">
-                  <td>Subtotal</td>
-                  <td><%= shopBucket.subtotalQty %></td>
-                  <td>$<%= shopBucket.subtotalRevenue.toFixed(2) %></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        <% }) %>
-        <p style="font-weight: 700; margin-top: -8px;">
-          Grand total across shops: <%= t.grandTotalQty %> sold — $<%= t.grandTotalRevenue.toFixed(2) %>
-        </p>
-      <% } %>
-    <% }) %>
-  <% } %>
 </div>
 
 </body>
