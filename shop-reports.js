@@ -590,6 +590,260 @@ function formatSalesSearchEmail(result) {
   return { subject: `Sales Search — ${result.terms.join(", ")} — ${result.startDateStr} to ${result.endDateStr}`, text: lines.join("\n") };
 }
 
+// ---- AI-powered natural-language sales search -----------------------------
+// Lets the admin ask things like "iced drink sales for the last 30 days,
+// ranked highest to lowest" or "grab and go sales broken down by flavour"
+// in plain English, instead of picking exact item names from a checklist.
+// Two Claude calls: the first resolves the vague parts (which shops, what
+// date range) into something code can act on; the second is shown the
+// ACTUAL distinct items sold in that window — grounded in the real,
+// inconsistently-named catalog rather than guessing item names blind — and
+// decides which ones are in scope, and how to group/rank them.
+const CLAUDE_API_BASE = "https://api.anthropic.com/v1/messages";
+
+async function callClaude({ system, userText, model, maxTokens }) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is missing");
+  const res = await fetch(CLAUDE_API_BASE, {
+    method: "POST",
+    headers: {
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: userText }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude API failed: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  return (data.content || []).map((c) => c.text || "").join("");
+}
+
+function extractJson(text) {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Model did not return JSON");
+  return JSON.parse(match[0]);
+}
+
+function todayMelbourneStr() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+// Step 1: turn the free-text question into shops + an absolute date range.
+async function parseNaturalSalesQuery(queryText) {
+  const todayStr = todayMelbourneStr();
+  const shopList = Object.entries(SHOP_INTEGRATIONS)
+    .map(([slug, c]) => `${slug} = ${c.displayName}`)
+    .join(", ");
+
+  const system = `You convert a cafe owner's plain-English sales question into strict JSON, nothing else.
+Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
+Return exactly this JSON shape:
+{"shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being searched for and over what period"}
+Rules: resolve relative dates ("past 30 days", "last quarter", "this month") into absolute dates; the end date must not be later than yesterday (${todayStr} is today and today's trading is incomplete); if no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above.`;
+
+  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 400 });
+  const parsed = extractJson(text);
+
+  const allSlugs = Object.keys(SHOP_INTEGRATIONS);
+  let shops =
+    parsed.shops === "all" || !Array.isArray(parsed.shops)
+      ? allSlugs
+      : parsed.shops.filter((s) => allSlugs.includes(s));
+  if (shops.length === 0) shops = allSlugs;
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(parsed.start) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(parsed.end) ||
+    parsed.start > parsed.end
+  ) {
+    throw new Error("Could not resolve a valid date range from the question");
+  }
+
+  return { shops, start: parsed.start, end: parsed.end, restatedQuestion: parsed.restated_question || queryText };
+}
+
+// Pull every distinct name+variation sold by each shop in the window, with
+// qty/revenue totals — the real, as-sold catalog, not a guessed item list.
+async function fetchDistinctItemsForShops(shopSlugs, startDateStr, endDateStr) {
+  const { startUtc } = melbourneDayRangeUtc(startDateStr);
+  const { endUtc } = melbourneDayRangeUtc(endDateStr);
+  const errors = {};
+  const perShopItems = {};
+
+  const fetched = await Promise.all(
+    shopSlugs.map(async (slug) => {
+      const config = SHOP_INTEGRATIONS[slug];
+      if (!config) return { slug, orders: null };
+      if (!process.env[config.squareTokenEnvVar]) return { slug, orders: null, error: "Square not connected" };
+      try {
+        const orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
+        return { slug, orders };
+      } catch (err) {
+        return { slug, orders: null, error: err.message };
+      }
+    })
+  );
+
+  for (const { slug, orders, error } of fetched) {
+    const config = SHOP_INTEGRATIONS[slug];
+    if (!config) continue;
+    if (error) {
+      errors[slug] = error;
+      continue;
+    }
+    const rowsByKey = {};
+    for (const order of orders) {
+      for (const li of order.line_items || []) {
+        const key = `${li.name || ""}|${li.variation_name || ""}`;
+        const revenue = (li.total_money?.amount || 0) / 100;
+        const qty = Number(li.quantity) || 0;
+        if (!rowsByKey[key]) {
+          rowsByKey[key] = { name: (li.name || "").trim(), variation: li.variation_name || "", qty: 0, revenue: 0 };
+        }
+        rowsByKey[key].qty += qty;
+        rowsByKey[key].revenue += revenue;
+      }
+    }
+    perShopItems[slug] = Object.values(rowsByKey).sort((a, b) => b.qty - a.qty);
+  }
+
+  return { perShopItems, errors };
+}
+
+// Step 2: show Claude the real, as-sold item list and the original
+// question, and have it decide which items match, and how to group/rank.
+async function classifySalesItems(queryText, perShopItems) {
+  const catalogLines = [];
+  for (const [slug, rows] of Object.entries(perShopItems)) {
+    for (const r of rows) {
+      catalogLines.push(`${slug}|${r.name}|${r.variation}|qty=${r.qty}|revenue=${r.revenue.toFixed(2)}`);
+    }
+  }
+
+  const system = `You are matching a cafe owner's sales question against the ACTUAL items sold, so you can tell code which rows are relevant and how to group them. The owner's question: "${queryText}"
+Each catalog line below is: shop_slug|item name|variation|qty=total sold|revenue=total $ in the period already asked about. Item naming is inconsistent between shops (e.g. "Golden Crunch" vs "Iced Golden Crunch", "M&M" vs "MnM") — use judgement.
+Return ONLY this JSON shape:
+{
+  "group_dimension_label": "short label for what 'group' means below, e.g. Flavour, Drink, Category, Item",
+  "rank": true or false (true only if the question explicitly asks for ranking/ordering by highest-to-lowest or similar),
+  "rank_by": "qty" or "revenue",
+  "rank_order": "desc" or "asc",
+  "matched": [{"shop": "slug", "name": "exact item name from the line", "variation": "exact variation from the line (or empty string)", "group": "the canonical label this row belongs under"}],
+  "note": "short caveat if any naming was ambiguous, else null"
+}
+Only include rows in "matched" that genuinely belong in scope for the question — leave out everything else (e.g. unrelated hot drinks, retail items, if the question is about a narrower category). Always assign a "group" even if grouping wasn't explicitly asked for — use the canonical product name in that case (e.g. normalize "Golden Crunch" and "Iced Golden Crunch" to the same group if they are the same drink).`;
+
+  const text = await callClaude({
+    system,
+    userText: catalogLines.join("\n") || "(no sales rows in this period)",
+    model: "claude-sonnet-5-5",
+    maxTokens: 8000,
+  });
+  const parsed = extractJson(text);
+  return {
+    groupDimensionLabel: parsed.group_dimension_label || "Item",
+    rank: Boolean(parsed.rank),
+    rankBy: parsed.rank_by === "revenue" ? "revenue" : "qty",
+    rankOrder: parsed.rank_order === "asc" ? "asc" : "desc",
+    matched: Array.isArray(parsed.matched) ? parsed.matched : [],
+    note: parsed.note || null,
+  };
+}
+
+async function buildNaturalSalesSearch(queryText) {
+  const parse = await parseNaturalSalesQuery(queryText);
+  const { perShopItems, errors } = await fetchDistinctItemsForShops(parse.shops, parse.start, parse.end);
+  const classification = await classifySalesItems(queryText, perShopItems);
+
+  // Join the matched rows back to their real qty/revenue, grouped by the
+  // label Claude assigned.
+  const groups = {};
+  for (const m of classification.matched) {
+    const rows = perShopItems[m.shop] || [];
+    const row = rows.find((r) => r.name === m.name && (r.variation || "") === (m.variation || ""));
+    if (!row) continue;
+    const groupKey = m.group || m.name;
+    if (!groups[groupKey]) groups[groupKey] = { label: groupKey, totalQty: 0, totalRevenue: 0, perShop: {} };
+    groups[groupKey].totalQty += row.qty;
+    groups[groupKey].totalRevenue += row.revenue;
+    if (!groups[groupKey].perShop[m.shop]) {
+      groups[groupKey].perShop[m.shop] = {
+        shopName: (SHOP_INTEGRATIONS[m.shop] || {}).displayName || m.shop,
+        qty: 0,
+        revenue: 0,
+      };
+    }
+    groups[groupKey].perShop[m.shop].qty += row.qty;
+    groups[groupKey].perShop[m.shop].revenue += row.revenue;
+  }
+
+  let groupList = Object.values(groups);
+  if (classification.rank) {
+    const field = classification.rankBy === "revenue" ? "totalRevenue" : "totalQty";
+    groupList.sort((a, b) => (classification.rankOrder === "asc" ? a[field] - b[field] : b[field] - a[field]));
+  } else {
+    groupList.sort((a, b) => b.totalQty - a.totalQty);
+  }
+
+  return {
+    queryText,
+    restatedQuestion: parse.restatedQuestion,
+    start: parse.start,
+    end: parse.end,
+    groupDimensionLabel: classification.groupDimensionLabel,
+    ranked: classification.rank,
+    note: classification.note,
+    groups: groupList,
+    errors,
+  };
+}
+
+function formatNaturalSalesSearchEmail(result) {
+  const lines = [
+    `Sales Search — "${result.queryText}"`,
+    result.restatedQuestion,
+    `Period: ${result.start} to ${result.end}`,
+    ``,
+  ];
+
+  for (const [slug, msg] of Object.entries(result.errors)) lines.push(`(${slug}: ${msg})`);
+  if (Object.keys(result.errors).length) lines.push(``);
+
+  if (result.note) lines.push(`Note: ${result.note}`, ``);
+
+  if (result.groups.length === 0) {
+    lines.push(`No matching sales found for this question in that period.`);
+  } else {
+    let grandQty = 0;
+    let grandRevenue = 0;
+    result.groups.forEach((g, i) => {
+      grandQty += g.totalQty;
+      grandRevenue += g.totalRevenue;
+      const rank = result.ranked ? `${i + 1}. ` : ``;
+      lines.push(`${rank}${g.label} — ${g.totalQty} sold — ${money(g.totalRevenue)}`);
+      for (const bucket of Object.values(g.perShop)) {
+        lines.push(`    ${bucket.shopName}: ${bucket.qty} — ${money(bucket.revenue)}`);
+      }
+      lines.push(``);
+    });
+    lines.push(`Grand total: ${grandQty} sold — ${money(grandRevenue)}`);
+  }
+
+  return {
+    subject: `Sales Search — ${result.restatedQuestion}`.slice(0, 200),
+    text: lines.join("\n"),
+  };
+}
+
 function hourLabel(h) {
   if (h === null || h === undefined) return "n/a";
   const to12 = (hh) => {
@@ -671,4 +925,6 @@ module.exports = {
   buildCookieSalesReport,
   buildItemSalesSearch,
   formatSalesSearchEmail,
+  buildNaturalSalesSearch,
+  formatNaturalSalesSearchEmail,
 };

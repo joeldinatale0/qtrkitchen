@@ -5,9 +5,12 @@
   <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
   <h1>Sales Search</h1>
   <p class="subtitle">
-    Search live Square sales by item name, across any shops, for any date range. Results are emailed to you —
-    a wide search can take a few minutes to pull.
+    Ask any sales question in plain English. Results are emailed to you — a wide search can take a few minutes to pull.
   </p>
+
+  <% if (!aiConfigured) { %>
+    <p class="error">ANTHROPIC_API_KEY is missing — ask Joel to add it in Render before this can work.</p>
+  <% } %>
 
   <% if (queued) { %>
     <div class="success-banner">
@@ -19,34 +22,24 @@
   <% } %>
 
   <form method="POST" action="/kitchen/sales-search" class="card">
-    <label for="terms">Item name(s) — one per line (matches anything containing this text)</label>
-    <textarea id="terms" name="terms" rows="4" placeholder="e.g.&#10;Wild Blanc&#10;Mont Blanc&#10;Strawberry Matcha"><%= termsRaw %></textarea>
-
-    <div style="margin-top: 16px;">
-      <label>Shops</label>
-      <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-        <% shopOptions.forEach(function(opt) { %>
-          <label style="display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; opacity: 1; font-size: 14px;">
-            <input type="checkbox" name="shops" value="<%= opt.slug %>" style="width: auto;" <%= selectedShops.includes(opt.slug) ? 'checked' : '' %> />
-            <%= opt.name %>
-          </label>
-        <% }) %>
-      </div>
-    </div>
-
-    <div style="display: flex; gap: 20px; margin-top: 16px; flex-wrap: wrap;">
-      <div>
-        <label for="start">Start date</label>
-        <input type="date" id="start" name="start" value="<%= start %>" required />
-      </div>
-      <div>
-        <label for="end">End date</label>
-        <input type="date" id="end" name="end" value="<%= end %>" required />
-      </div>
-    </div>
-
-    <button class="btn btn-filled" type="submit" style="margin-top: 20px;">Search</button>
+    <label for="query">What do you want to know?</label>
+    <textarea id="query" name="query" rows="3" placeholder="e.g. find me the grab and go sales for the past 30 days and break it down into flavour categories"><%= query %></textarea>
+    <button class="btn btn-filled" type="submit" style="margin-top: 16px;">Search</button>
   </form>
+
+  <div class="card" style="margin-top: 20px;">
+    <p class="item-name" style="margin-bottom: 8px;">Example questions</p>
+    <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: var(--muted, #666);">
+      <li>Find me the grab and go sales for the past 30 days and break it down into flavour categories</li>
+      <li>Iced drinks sales for the past 30 days, ranked highest to lowest, across all shops</li>
+      <li>How did Wild Blanc sell at Essendon over the last 2 weeks?</li>
+      <li>Cookie sales at Highpoint for October, broken down by flavour</li>
+    </ul>
+  </div>
+
+  <p class="muted" style="margin-top: 20px;">
+    Need exact item-name matching instead? <a href="/kitchen/sales-search/advanced">Use Advanced Search</a>.
+  </p>
 </div>
 
 </body>

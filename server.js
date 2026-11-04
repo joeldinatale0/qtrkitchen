@@ -17,6 +17,8 @@ const {
   buildCookieSalesReport,
   buildItemSalesSearch,
   formatSalesSearchEmail,
+  buildNaturalSalesSearch,
+  formatNaturalSalesSearchEmail,
 } = require("./shop-reports");
 
 const app = express();
@@ -1302,14 +1304,72 @@ app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), as
   }
 });
 
-// Self-service ad hoc item sales search — pick shops, item name(s) to
-// search for, and a date range, and see live Square sales for exactly
-// that, without needing a one-off script written each time.
+// Self-service AI sales search — ask any plain-English sales question
+// ("iced drink sales for the last 30 days, ranked highest to lowest") and
+// Claude resolves the date range/shops, looks at the real Square sales for
+// that window, and decides what matches and how to group/rank it. Results
+// are emailed (same async pattern as below — a wide search is slow).
 app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
+  res.render("kitchen-sales-search", {
+    query: "",
+    queued: false,
+    error: null,
+    reportsEmail: DAILY_REPORT_EMAIL_TO,
+    aiConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+  });
+});
+
+app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
+  const query = (req.body.query || "").trim();
+
+  const renderWith = (error) =>
+    res.render("kitchen-sales-search", {
+      query,
+      queued: false,
+      error,
+      reportsEmail: DAILY_REPORT_EMAIL_TO,
+      aiConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    });
+
+  if (!query) return renderWith("Type a question to search for.");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return renderWith("ANTHROPIC_API_KEY is missing — ask Joel to add it in Render before this can work.");
+  }
+  if (!process.env.GMAIL_APP_PASSWORD) {
+    return renderWith("GMAIL_APP_PASSWORD is missing — cannot email the results.");
+  }
+
+  buildNaturalSalesSearch(query)
+    .then((result) => {
+      const email = formatNaturalSalesSearchEmail(result);
+      return sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
+    })
+    .then(() => console.log(`Sales search emailed for: "${query}"`))
+    .catch((err) => {
+      console.error("Sales search failed:", err.message);
+      sendEmail({
+        to: DAILY_REPORT_EMAIL_TO,
+        subject: `Sales Search failed — "${query}"`,
+        text: `Your search "${query}" could not be completed.\n\nError: ${err.message}`,
+      }).catch((e) => console.error("Sales search failure email also failed:", e.message));
+    });
+
+  res.render("kitchen-sales-search", {
+    query,
+    queued: true,
+    error: null,
+    reportsEmail: DAILY_REPORT_EMAIL_TO,
+    aiConfigured: true,
+  });
+});
+
+// The original exact-term search — pick shops, item name(s), and a date
+// range yourself. Kept as a fallback for precise term matching.
+app.get("/kitchen/sales-search/advanced", requireAuth, requireRole("kitchen"), (req, res) => {
   const allShopSlugs = Object.keys(SHOP_INTEGRATIONS);
   const shopOptions = allShopSlugs.map((slug) => ({ slug, name: SHOP_INTEGRATIONS[slug].displayName }));
 
-  res.render("kitchen-sales-search", {
+  res.render("kitchen-sales-search-advanced", {
     shopOptions,
     selectedShops: allShopSlugs,
     termsRaw: "",
@@ -1326,7 +1386,7 @@ app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res)
 // liable to hit a gateway timeout and just look frozen). So this responds
 // immediately with a confirmation and runs the actual search in the
 // background, emailing the result when it is done.
-app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
+app.post("/kitchen/sales-search/advanced", requireAuth, requireRole("kitchen"), (req, res) => {
   const allShopSlugs = Object.keys(SHOP_INTEGRATIONS);
   const selectedShops = [].concat(req.body.shops || []).filter((s) => allShopSlugs.includes(s));
   const termsRaw = (req.body.terms || "").trim();
@@ -1335,7 +1395,7 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
   const shopOptions = allShopSlugs.map((slug) => ({ slug, name: SHOP_INTEGRATIONS[slug].displayName }));
 
   const renderWith = (error) =>
-    res.render("kitchen-sales-search", {
+    res.render("kitchen-sales-search-advanced", {
       shopOptions,
       selectedShops,
       termsRaw,
@@ -1369,7 +1429,7 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
     .then(() => console.log(`Sales search emailed for terms: ${terms.join(", ")}`))
     .catch((err) => console.error("Sales search failed:", err.message));
 
-  res.render("kitchen-sales-search", {
+  res.render("kitchen-sales-search-advanced", {
     shopOptions,
     selectedShops,
     termsRaw,
