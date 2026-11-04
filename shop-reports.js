@@ -644,8 +644,10 @@ function todayMelbourneStr() {
   }).format(new Date());
 }
 
-// Step 1: turn the free-text question into an intent (sales/labour/both) +
-// shops + an absolute date range.
+// Step 1: turn the free-text question into which data source(s) it needs
+// (sales/labour/cash/report), shops, an absolute date range, and — for the
+// cash/report domains, which have no messy name-matching problem — which
+// single number (if any) the question cares about and how to rank it.
 async function parseNaturalQuery(queryText) {
   const todayStr = todayMelbourneStr();
   const shopList = Object.entries(SHOP_INTEGRATIONS)
@@ -655,10 +657,15 @@ async function parseNaturalQuery(queryText) {
   const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
-{"intent": "sales" or "labour" or "both", "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period"}
-Rules: "intent" is "sales" for questions about what sold, revenue, items, drinks, food; "labour" for questions about hours worked, staff, employees, shifts, wages, rostering, labour cost; "both" only if the question genuinely asks about both together (e.g. comparing sales to labour cost). Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above.`;
+{"domains": ["sales" and/or "labour" and/or "cash" and/or "report"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
+Rules for "domains" (include every one the question genuinely touches, usually just one):
+- "sales": what sold, revenue, items, drinks, food.
+- "labour": hours worked, staff, employees, shifts, wages, rostering, labour cost.
+- "cash": EOD cash sheet / till reconciliation data — till counts, cash vs EFTPOS vs Uber sales recorded at close of day, discrepancies, float.
+- "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) tracked as a trend across multiple days — NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
+Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least.`;
 
-  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 400 });
+  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 500 });
   const parsed = extractJson(text, "parseNaturalQuery");
 
   const allSlugs = Object.keys(SHOP_INTEGRATIONS);
@@ -676,14 +683,19 @@ Rules: "intent" is "sales" for questions about what sold, revenue, items, drinks
     throw new Error("Could not resolve a valid date range from the question");
   }
 
-  const intent = ["sales", "labour", "both"].includes(parsed.intent) ? parsed.intent : "sales";
+  const validDomains = ["sales", "labour", "cash", "report"];
+  let domains = Array.isArray(parsed.domains) ? parsed.domains.filter((d) => validDomains.includes(d)) : [];
+  if (domains.length === 0) domains = ["sales"];
 
   return {
-    intent,
+    domains,
     shops,
     start: parsed.start,
     end: parsed.end,
     restatedQuestion: parsed.restated_question || queryText,
+    focusMetric: typeof parsed.focus_metric === "string" ? parsed.focus_metric.trim().toLowerCase() : null,
+    rank: Boolean(parsed.rank),
+    rankOrder: parsed.rank_order === "asc" ? "asc" : "desc",
   };
 }
 
@@ -1078,9 +1090,127 @@ function formatLabourPart(labour) {
   return lines.join("\n");
 }
 
-// Single entry point for the free-text search box — resolves intent once,
-// then runs the sales and/or labour pipeline(s) it calls for.
-async function buildNaturalSearch(queryText) {
+// ---- Cash & report ("memory bank") sides of natural-language search ----
+// Both read straight from this app's own SQLite database — eod_cash_sheets
+// already holds every EOD cash sheet ever submitted, and
+// daily_shop_snapshots accumulates one row per shop per day going forward
+// from whenever that table started being written to (see db.js). Neither
+// has a messy real-world name-matching problem like Square's item catalog,
+// so there is no second Claude call here — the generic focus_metric/rank
+// fields from parseNaturalQuery are enough.
+const CASH_METRICS = {
+  discrepancy: { label: "Discrepancy", col: "discrepancy_cents" },
+  till_amount: { label: "Till amount", col: "till_amount_cents" },
+  cash_sales: { label: "Cash sales", col: "cash_sales_cents" },
+  eftpos_sales: { label: "EFTPOS sales", col: "eftpos_sales_cents" },
+  uber_sales: { label: "Uber sales", col: "uber_sales_cents" },
+  cash_amount: { label: "Cash counted", col: "cash_amount_cents" },
+  float: { label: "Float", col: "float_cents" },
+};
+
+const REPORT_METRICS = {
+  net_sales: { label: "Net sales", col: "net_sales_cents", cents: true },
+  labour_pct: { label: "Labour %", col: "labour_pct", pct: true },
+  cogs_pct: { label: "COGS %", col: "cogs_pct", pct: true },
+  prime_cost_pct: { label: "Prime cost %", col: "prime_cost_pct", pct: true },
+  labour_hours: { label: "Labour hours", col: "labour_hours", raw: true },
+  labour_cost: { label: "Labour cost", col: "labour_cost_cents", cents: true },
+  transaction_count: { label: "Transactions", col: "transaction_count", raw: true },
+  avg_spend: { label: "Average spend", col: "avg_spend_cents", cents: true },
+  discounts: { label: "Discounts", col: "discounts_cents", cents: true },
+};
+for (const m of Object.values(CASH_METRICS)) m.cents = true;
+
+function buildCashSearchPart(db, parse) {
+  const placeholders = parse.shops.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT * FROM eod_cash_sheets WHERE shop_slug IN (${placeholders}) AND report_date >= ? AND report_date <= ? ORDER BY report_date`
+    )
+    .all(...parse.shops, parse.start, parse.end);
+  return { rows, focusMetric: CASH_METRICS[parse.focusMetric] ? parse.focusMetric : null, rank: parse.rank, rankOrder: parse.rankOrder };
+}
+
+function formatCashPart(cash) {
+  const lines = [`CASH (EOD Cash Sheets)`, ``];
+  if (cash.rows.length === 0) {
+    lines.push(`No EOD cash sheets submitted in that period.`);
+    return lines.join("\n");
+  }
+
+  let rows = cash.rows.map((r) => ({ ...r, shopName: (SHOP_INTEGRATIONS[r.shop_slug] || {}).displayName || r.shop_slug }));
+  if (cash.rank && cash.focusMetric) {
+    const col = CASH_METRICS[cash.focusMetric].col;
+    rows.sort((a, b) => (cash.rankOrder === "asc" ? a[col] - b[col] : b[col] - a[col]));
+  }
+
+  rows.forEach((r, i) => {
+    const rank = cash.rank && cash.focusMetric ? `${i + 1}. ` : ``;
+    lines.push(`${rank}${r.shopName} — ${r.report_date}`);
+    if (cash.focusMetric) {
+      lines.push(`    ${CASH_METRICS[cash.focusMetric].label}: ${money(r[CASH_METRICS[cash.focusMetric].col] / 100)}`);
+    } else {
+      lines.push(
+        `    Till: ${money(r.till_amount_cents / 100)}  EFTPOS: ${money(r.eftpos_sales_cents / 100)}  Uber: ${money(r.uber_sales_cents / 100)}  Cash sales: ${money(r.cash_sales_cents / 100)}`
+      );
+      lines.push(
+        `    Float: ${money(r.float_cents / 100)}  Cash counted: ${money(r.cash_amount_cents / 100)}  Discrepancy: ${money(r.discrepancy_cents / 100)}`
+      );
+    }
+  });
+
+  const totalDiscrepancy = cash.rows.reduce((s, r) => s + r.discrepancy_cents, 0) / 100;
+  lines.push(``, `Total discrepancy across these sheets: ${money(totalDiscrepancy)}`);
+  return lines.join("\n");
+}
+
+function buildReportSearchPart(db, parse) {
+  const placeholders = parse.shops.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT * FROM daily_shop_snapshots WHERE shop_slug IN (${placeholders}) AND report_date >= ? AND report_date <= ? ORDER BY report_date`
+    )
+    .all(...parse.shops, parse.start, parse.end);
+  return { rows, focusMetric: REPORT_METRICS[parse.focusMetric] ? parse.focusMetric : null, rank: parse.rank, rankOrder: parse.rankOrder };
+}
+
+function formatReportPart(report) {
+  const lines = [
+    `REPORT TREND (daily sales/labour/COGS summary)`,
+    `(Only available from whenever this started saving snapshots each day — a day with none yet just will not appear.)`,
+    ``,
+  ];
+  if (report.rows.length === 0) {
+    lines.push(`No saved daily snapshots in that period yet.`);
+    return lines.join("\n");
+  }
+
+  let rows = report.rows.map((r) => ({ ...r, shopName: (SHOP_INTEGRATIONS[r.shop_slug] || {}).displayName || r.shop_slug }));
+  const metric = report.focusMetric ? REPORT_METRICS[report.focusMetric] : null;
+  const fmt = (r, m) => (m.cents ? money(r[m.col] / 100) : m.pct ? `${(r[m.col] || 0).toFixed(1)}%` : `${r[m.col]}`);
+
+  if (report.rank && metric) {
+    rows.sort((a, b) => (report.rankOrder === "asc" ? a[metric.col] - b[metric.col] : b[metric.col] - a[metric.col]));
+  }
+
+  rows.forEach((r, i) => {
+    const rank = report.rank && metric ? `${i + 1}. ` : ``;
+    if (metric) {
+      lines.push(`${rank}${r.shopName} — ${r.report_date} — ${metric.label}: ${fmt(r, metric)}`);
+    } else {
+      lines.push(`${rank}${r.shopName} — ${r.report_date}`);
+      lines.push(
+        `    Net sales: ${money(r.net_sales_cents / 100)}  Labour %: ${(r.labour_pct || 0).toFixed(1)}%  COGS %: ${(r.cogs_pct || 0).toFixed(1)}%  Prime cost %: ${(r.prime_cost_pct || 0).toFixed(1)}%`
+      );
+    }
+  });
+
+  return lines.join("\n");
+}
+
+// Single entry point for the free-text search box — resolves which data
+// source(s) the question needs once, then runs each matching pipeline.
+async function buildNaturalSearch(db, queryText) {
   const parse = await parseNaturalQuery(queryText);
   const result = {
     queryText,
@@ -1089,18 +1219,12 @@ async function buildNaturalSearch(queryText) {
     end: parse.end,
   };
 
-  if (parse.intent === "labour") {
-    result.labour = await buildLabourSearchPart(queryText, parse);
-  } else if (parse.intent === "sales") {
-    result.sales = await buildSalesSearchPart(queryText, parse);
-  } else {
-    const [sales, labour] = await Promise.all([
-      buildSalesSearchPart(queryText, parse),
-      buildLabourSearchPart(queryText, parse),
-    ]);
-    result.sales = sales;
-    result.labour = labour;
-  }
+  const jobs = [];
+  if (parse.domains.includes("sales")) jobs.push(buildSalesSearchPart(queryText, parse).then((r) => (result.sales = r)));
+  if (parse.domains.includes("labour")) jobs.push(buildLabourSearchPart(queryText, parse).then((r) => (result.labour = r)));
+  if (parse.domains.includes("cash")) result.cash = buildCashSearchPart(db, parse);
+  if (parse.domains.includes("report")) result.report = buildReportSearchPart(db, parse);
+  await Promise.all(jobs);
 
   return result;
 }
@@ -1114,7 +1238,9 @@ function formatNaturalSearchEmail(result) {
   ];
 
   if (result.sales) lines.push(formatSalesPart(result.sales), ``);
-  if (result.labour) lines.push(formatLabourPart(result.labour));
+  if (result.labour) lines.push(formatLabourPart(result.labour), ``);
+  if (result.cash) lines.push(formatCashPart(result.cash), ``);
+  if (result.report) lines.push(formatReportPart(result.report));
 
   return {
     subject: `Search — ${result.restatedQuestion}`.slice(0, 200),

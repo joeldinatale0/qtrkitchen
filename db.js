@@ -207,6 +207,31 @@ db.exec(`
     report_date TEXT NOT NULL UNIQUE,
     sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- One row per shop per day, saved whenever that day's daily sales/labour
+  -- report is generated. The daily report itself was previously computed
+  -- and emailed once, then thrown away — this is what lets the AI search
+  -- answer trend questions (COGS %, labour %, prime cost %, vs target) over
+  -- a date range without re-deriving every day live from Square + Tanda,
+  -- and it only accumulates going forward from whenever this table started
+  -- being written to, not retroactively.
+  CREATE TABLE IF NOT EXISTS daily_shop_snapshots (
+    shop_slug TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    net_sales_cents INTEGER,
+    transaction_count INTEGER,
+    avg_spend_cents INTEGER,
+    discounts_cents INTEGER,
+    target_cents INTEGER,
+    labour_hours REAL,
+    labour_cost_cents INTEGER,
+    labour_pct REAL,
+    cogs_cents INTEGER,
+    cogs_pct REAL,
+    prime_cost_pct REAL,
+    saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (shop_slug, report_date)
+  );
 `);
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from

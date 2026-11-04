@@ -257,6 +257,39 @@ async function sendWeeklySummaryIfDue() {
 
 const DAILY_SHOP_REPORT_HOUR = 17; // 5:00 PM Melbourne time
 
+// Persists the computed daily report as one row of history the AI search
+// can later query as a trend — the report itself was previously computed
+// once and emailed, then thrown away.
+function saveShopSnapshot(shopSlug, report) {
+  db.prepare(
+    `INSERT INTO daily_shop_snapshots
+       (shop_slug, report_date, net_sales_cents, transaction_count, avg_spend_cents, discounts_cents,
+        target_cents, labour_hours, labour_cost_cents, labour_pct, cogs_cents, cogs_pct, prime_cost_pct)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(shop_slug, report_date) DO UPDATE SET
+       net_sales_cents=excluded.net_sales_cents, transaction_count=excluded.transaction_count,
+       avg_spend_cents=excluded.avg_spend_cents, discounts_cents=excluded.discounts_cents,
+       target_cents=excluded.target_cents, labour_hours=excluded.labour_hours,
+       labour_cost_cents=excluded.labour_cost_cents, labour_pct=excluded.labour_pct,
+       cogs_cents=excluded.cogs_cents, cogs_pct=excluded.cogs_pct, prime_cost_pct=excluded.prime_cost_pct,
+       saved_at=CURRENT_TIMESTAMP`
+  ).run(
+    shopSlug,
+    report.dateStr,
+    Math.round(report.netSales * 100),
+    report.transactionCount,
+    Math.round(report.avgSpend * 100),
+    Math.round(report.discounts * 100),
+    report.targetDollars !== null ? Math.round(report.targetDollars * 100) : null,
+    report.labourHours,
+    report.labourCost !== null ? Math.round(report.labourCost * 100) : null,
+    report.labourPct,
+    Math.round(report.cogsDollars * 100),
+    report.cogsPct,
+    report.primeCostPct
+  );
+}
+
 async function sendDailyShopReportsIfDue() {
   if (!process.env.GMAIL_APP_PASSWORD) return;
   if (melbourneHour() < DAILY_SHOP_REPORT_HOUR) return;
@@ -282,6 +315,7 @@ async function sendDailyShopReportsIfDue() {
         today,
         shopSlug
       );
+      saveShopSnapshot(shopSlug, report);
       console.log(`Daily shop report emailed for ${config.displayName}, ${today}`);
     } catch (err) {
       console.error(`Daily shop report failed for ${shopSlug}:`, err.message);
@@ -1350,7 +1384,7 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
   }
 
   naturalSearchInProgress = true;
-  buildNaturalSearch(query)
+  buildNaturalSearch(db, query)
     .then((result) => {
       const email = formatNaturalSearchEmail(result);
       return sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text });
