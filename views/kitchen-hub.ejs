@@ -7,6 +7,13 @@
     <p class="subtitle" style="margin-bottom: 0;">Pick a shop to see its orders, EOD cash sheets and reports.</p>
   </div>
 
+  <% if (msg) { %>
+    <div class="success-banner" style="margin-bottom: 24px;"><%= msg %></div>
+  <% } %>
+  <% if (error) { %>
+    <p class="error" style="margin-bottom: 24px;"><%= error %></p>
+  <% } %>
+
   <div class="store-grid">
     <% shops.forEach(function(shop) { %>
       <a class="store-tile" href="/kitchen/shop/<%= shop.slug %>"><%= shop.name %></a>
@@ -42,6 +49,13 @@
     <div class="item-row">
       <span class="item-name">Del Re Orders (Essendon)</span>
       <a class="btn btn-small" href="/kitchen/delre">Open</a>
+    </div>
+    <div class="item-row">
+      <span class="item-name">Backfill report-trend history (for Sales &amp; Labour Search)</span>
+      <form method="POST" action="/kitchen/admin/backfill-snapshots" class="inline-form">
+        <input type="hidden" name="days" value="90" />
+        <button class="btn btn-small" type="submit">Backfill last 90 days</button>
+      </form>
     </div>
   </div>
 

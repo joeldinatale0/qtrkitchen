@@ -290,6 +290,54 @@ function saveShopSnapshot(shopSlug, report) {
   );
 }
 
+// One-time (re-runnable) backfill so trend/report questions work for past
+// days too, not just going forward from when daily_shop_snapshots started
+// being written to. Square/Tanda still have the underlying history for any
+// past date (buildDailyShopReport already supports an overrideDateStr) —
+// today's live $ labour cost just never applies to a backfilled past day,
+// same limit the daily report itself already has. Sequential, not
+// parallel, and gated by the same kind of lock as the search box — this
+// hits Square/Tanda once per shop per day and running it alongside a
+// live search is exactly the kind of overlap that crashed the app before.
+let backfillInProgress = false;
+
+async function backfillShopSnapshots(days) {
+  if (backfillInProgress) throw new Error("A backfill is already running");
+  backfillInProgress = true;
+  const actualTodayStr = melbourneDateString();
+  let saved = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  try {
+    for (const [shopSlug, config] of Object.entries(SHOP_INTEGRATIONS)) {
+      for (let i = 1; i <= days; i++) {
+        const dateStr = addDays(actualTodayStr, -i);
+        const already = db
+          .prepare("SELECT 1 FROM daily_shop_snapshots WHERE shop_slug = ? AND report_date = ?")
+          .get(shopSlug, dateStr);
+        if (already) {
+          skipped++;
+          continue;
+        }
+        try {
+          const report = await buildDailyShopReport(db, shopSlug, config.displayName, addDays, dateStr);
+          if (!report) continue; // missing Square/Tanda credentials
+          saveShopSnapshot(shopSlug, report);
+          saved++;
+        } catch (err) {
+          failed++;
+          console.error(`Backfill failed for ${shopSlug} ${dateStr}:`, err.message);
+        }
+      }
+    }
+  } finally {
+    backfillInProgress = false;
+  }
+
+  return { days, saved, skipped, failed };
+}
+
 async function sendDailyShopReportsIfDue() {
   if (!process.env.GMAIL_APP_PASSWORD) return;
   if (melbourneHour() < DAILY_SHOP_REPORT_HOUR) return;
@@ -907,7 +955,7 @@ app.get("/kitchen", requireAuth, requireRole("kitchen"), (req, res) => {
     slug,
     name: config.displayName,
   }));
-  res.render("kitchen-hub", { shops, reportingShops });
+  res.render("kitchen-hub", { shops, reportingShops, msg: req.query.msg || null, error: req.query.error || null });
 });
 
 app.get("/kitchen/shop/:slug", requireAuth, requireRole("kitchen"), (req, res) => {
@@ -1593,6 +1641,38 @@ app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"
   req.session.destroy(() => {
     res.json({ ok: true, message: "Credentials updated — log in again with the new username and password." });
   });
+});
+
+// Backfills daily_shop_snapshots for the last `days` days across every
+// shop, so the AI search's "report" domain (COGS %, labour %, prime cost %
+// trend) works for the past too, not just going forward. Runs in the
+// background and emails a summary when done — for 90 days x 3 shops this
+// is ~270 Square/Tanda calls and can take several minutes.
+app.post("/kitchen/admin/backfill-snapshots", requireAuth, requireRole("kitchen"), (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.body.days, 10) || 90, 1), 365);
+
+  if (backfillInProgress) {
+    return res.redirect(`/kitchen?error=1&msg=${encodeURIComponent("A backfill is already running.")}`);
+  }
+
+  backfillShopSnapshots(days)
+    .then((result) => {
+      console.log(`Snapshot backfill done: ${JSON.stringify(result)}`);
+      if (process.env.GMAIL_APP_PASSWORD) {
+        return sendEmail({
+          to: DAILY_REPORT_EMAIL_TO,
+          subject: `Report-trend backfill done — ${days} days`,
+          text: `Backfilled daily report snapshots for the last ${days} days across every shop.\n\nSaved: ${result.saved}\nAlready had a snapshot (skipped): ${result.skipped}\nFailed: ${result.failed}`,
+        });
+      }
+    })
+    .catch((err) => console.error("Snapshot backfill failed:", err.message));
+
+  res.redirect(
+    `/kitchen?msg=${encodeURIComponent(
+      `Backfilling the last ${days} days in the background — you'll get an email when it's done.`
+    )}`
+  );
 });
 
 // ---------- Kitchen: manage par levels per shop ----------
