@@ -1319,6 +1319,12 @@ app.get("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res)
   });
 });
 
+// Pulling every item sold across every shop for a wide date range (before
+// Claude narrows it down) is the heaviest thing this app does — running two
+// of these at once is what pushed a Render instance over its memory limit
+// and crashed the whole app. One at a time only.
+let naturalSalesSearchInProgress = false;
+
 app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res) => {
   const query = (req.body.query || "").trim();
 
@@ -1338,7 +1344,11 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
   if (!process.env.GMAIL_APP_PASSWORD) {
     return renderWith("GMAIL_APP_PASSWORD is missing — cannot email the results.");
   }
+  if (naturalSalesSearchInProgress) {
+    return renderWith("Another search is already running — wait a minute for it to finish, then try again.");
+  }
 
+  naturalSalesSearchInProgress = true;
   buildNaturalSalesSearch(query)
     .then((result) => {
       const email = formatNaturalSalesSearchEmail(result);
@@ -1352,6 +1362,9 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
         subject: `Sales Search failed — "${query}"`,
         text: `Your search "${query}" could not be completed.\n\nError: ${err.message}`,
       }).catch((e) => console.error("Sales search failure email also failed:", e.message));
+    })
+    .finally(() => {
+      naturalSalesSearchInProgress = false;
     });
 
   res.render("kitchen-sales-search", {
