@@ -622,10 +622,17 @@ async function callClaude({ system, userText, model, maxTokens }) {
   return (data.content || []).map((c) => c.text || "").join("");
 }
 
-function extractJson(text) {
+function extractJson(text, context) {
+  const label = context || "Model";
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Model did not return JSON");
-  return JSON.parse(match[0]);
+  if (!match) {
+    throw new Error(`${label} did not return JSON — raw response: ${(text || "(empty)").slice(0, 400)}`);
+  }
+  try {
+    return JSON.parse(match[0]);
+  } catch (err) {
+    throw new Error(`${label} returned invalid JSON (${err.message}) — raw: ${match[0].slice(0, 400)}`);
+  }
 }
 
 function todayMelbourneStr() {
@@ -647,12 +654,12 @@ async function parseNaturalQuery(queryText) {
 
   const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
-Return exactly this JSON shape:
+Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
 {"intent": "sales" or "labour" or "both", "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period"}
 Rules: "intent" is "sales" for questions about what sold, revenue, items, drinks, food; "labour" for questions about hours worked, staff, employees, shifts, wages, rostering, labour cost; "both" only if the question genuinely asks about both together (e.g. comparing sales to labour cost). Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above.`;
 
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 400 });
-  const parsed = extractJson(text);
+  const parsed = extractJson(text, "parseNaturalQuery");
 
   const allSlugs = Object.keys(SHOP_INTEGRATIONS);
   let shops =
@@ -749,7 +756,8 @@ Return ONLY this JSON shape:
   "matched": [{"shop": "slug", "name": "exact item name from the line", "variation": "exact variation from the line (or empty string)", "group": "the canonical label this row belongs under"}],
   "note": "short caveat if any naming was ambiguous, else null"
 }
-Only include rows in "matched" that genuinely belong in scope for the question — leave out everything else (e.g. unrelated hot drinks, retail items, if the question is about a narrower category). Always assign a "group" even if grouping wasn't explicitly asked for — use the canonical product name in that case (e.g. normalize "Golden Crunch" and "Iced Golden Crunch" to the same group if they are the same drink).`;
+Only include rows in "matched" that genuinely belong in scope for the question — leave out everything else (e.g. unrelated hot drinks, retail items, if the question is about a narrower category). Always assign a "group" even if grouping wasn't explicitly asked for — use the canonical product name in that case (e.g. normalize "Golden Crunch" and "Iced Golden Crunch" to the same group if they are the same drink).
+Respond with ONLY the raw JSON object — no markdown code fences, no explanation before or after it.`;
 
   const text = await callClaude({
     system,
@@ -757,7 +765,7 @@ Only include rows in "matched" that genuinely belong in scope for the question �
     model: "claude-sonnet-5-5",
     maxTokens: 8000,
   });
-  const parsed = extractJson(text);
+  const parsed = extractJson(text, "classifySalesItems");
   return {
     groupDimensionLabel: parsed.group_dimension_label || "Item",
     rank: Boolean(parsed.rank),
@@ -971,7 +979,8 @@ Return ONLY this JSON shape:
   "rank_order": "desc" or "asc",
   "employee_filter_ids": ["id", ...] (ids of employees the question specifically names, matched by name even with a slightly different spelling — empty array if the question is about everyone, not a specific person),
   "note": "short caveat if any name was ambiguous, else null"
-}`;
+}
+Respond with ONLY the raw JSON object — no markdown code fences, no explanation before or after it.`;
 
   const text = await callClaude({
     system,
@@ -979,7 +988,7 @@ Return ONLY this JSON shape:
     model: "claude-haiku-5-5",
     maxTokens: 800,
   });
-  const parsed = extractJson(text);
+  const parsed = extractJson(text, "classifyLabourQuery");
   return {
     groupBy: ["employee", "day", "shop"].includes(parsed.group_by) ? parsed.group_by : "none",
     rank: Boolean(parsed.rank),
