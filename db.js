@@ -232,6 +232,24 @@ db.exec(`
     saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (shop_slug, report_date)
   );
+
+  -- Catering orders taken outside the online checkout (WhatsApp, phone,
+  -- email) — these never create a Square order, so unlike the checkout
+  -- ones there is nothing to pull live; they have to be entered here once
+  -- and then show up in the Catering admin page alongside the Square ones.
+  CREATE TABLE IF NOT EXISTS catering_orders_manual (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_name TEXT,
+    phone TEXT,
+    email TEXT,
+    event_date TEXT,
+    fulfillment TEXT,
+    address TEXT,
+    notes TEXT,
+    items_json TEXT NOT NULL,
+    total_cents INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from

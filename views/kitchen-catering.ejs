@@ -3,11 +3,14 @@
 
 <div class="container">
   <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
-  <h1>Catering</h1>
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+    <h1>Catering</h1>
+    <a class="btn btn-filled btn-small" href="/kitchen/catering/add">+ Add order taken by phone/WhatsApp/email</a>
+  </div>
   <p class="subtitle">
-    Every QTR Catering order, from the separate catering checkout — not tied to any one shop. The date range below
-    filters by when the order was <strong>placed</strong>; results are sorted by the <strong>event date</strong>
-    so upcoming jobs are easy to scan.
+    Every QTR Catering order — the online checkout and anything taken manually — not tied to any one shop. For online
+    orders the date range filters by when they were <strong>placed</strong>; for manually-added orders it filters by
+    the <strong>event date</strong>, since that is the only date those have. Everything is sorted by event date.
   </p>
 
   <% if (error) { %>
@@ -17,7 +20,7 @@
   <form method="GET" action="/kitchen/catering" class="card">
     <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end;">
       <div>
-        <label for="start">Orders placed from</label>
+        <label for="start">From</label>
         <input type="date" id="start" name="start" value="<%= start %>" required />
       </div>
       <div>
@@ -29,7 +32,7 @@
   </form>
 
   <% if (!error && orders.length === 0) { %>
-    <p class="muted" style="margin-top: 24px;">No catering orders placed in that range.</p>
+    <p class="muted" style="margin-top: 24px;">No catering orders in that range.</p>
   <% } %>
 
   <% orders.forEach(function(o) { %>
@@ -39,11 +42,19 @@
           <p class="item-name" style="font-size: 18px; margin-bottom: 2px;">
             Event date: <%= o.eventDate || "not given" %>
           </p>
-          <p class="muted" style="margin: 0;">Order placed <%= new Date(o.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" }) %></p>
+          <% if (o.source === 'square') { %>
+            <p class="muted" style="margin: 0;">Online order placed <%= new Date(o.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" }) %></p>
+          <% } else { %>
+            <p class="muted" style="margin: 0;">Added manually <%= new Date(o.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" }) %></p>
+          <% } %>
         </div>
-        <span class="btn btn-small" style="pointer-events: none; <%= o.state === 'COMPLETED' ? 'background: var(--qtr-baby-blue, #C6D7E8); color: #1A1A18;' : 'background: #f0d8a8; color: #1A1A18;' %>">
-          <%= o.state === 'COMPLETED' ? 'Paid' : 'Awaiting payment' %>
-        </span>
+        <% if (o.source === 'square') { %>
+          <span class="btn btn-small" style="pointer-events: none; <%= o.state === 'COMPLETED' ? 'background: var(--qtr-baby-blue, #C6D7E8); color: #1A1A18;' : 'background: #f0d8a8; color: #1A1A18;' %>">
+            <%= o.state === 'COMPLETED' ? 'Paid' : 'Awaiting payment' %>
+          </span>
+        <% } else { %>
+          <span class="btn btn-small" style="pointer-events: none; background: #e0dcd3; color: #1A1A18;">Manually added</span>
+        <% } %>
       </div>
 
       <div style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px;">
@@ -58,12 +69,12 @@
         <% o.lineItems.forEach(function(li) { %>
           <div style="display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0;">
             <span><%= li.qty %> &times; <%= li.name %></span>
-            <span>$<%= li.amount.toFixed(2) %></span>
+            <span><%= li.amount ? "$" + li.amount.toFixed(2) : "" %></span>
           </div>
         <% }) %>
         <div style="display: flex; justify-content: space-between; font-weight: 600; border-top: 1px solid #e0dcd3; margin-top: 6px; padding-top: 6px;">
           <span>Total</span>
-          <span>$<%= o.total.toFixed(2) %></span>
+          <span><%= (o.total !== null && o.total !== undefined) ? "$" + o.total.toFixed(2) : "not provided" %></span>
         </div>
       </div>
 

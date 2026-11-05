@@ -1462,9 +1462,35 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
 
 // Catering orders — its own admin section (not nested under any shop,
 // even though the catering checkout happens to post into the Essendon
-// Square account under the hood). Date range filters by when the order
-// was PLACED; results are sorted by the catering EVENT date so upcoming
-// jobs are easy to scan regardless of when each was booked.
+// Square account under the hood). For checkout orders, the date range
+// filters by when the order was PLACED (Square has no event-date filter);
+// for manually-entered orders (WhatsApp/phone/email — never create a
+// Square order at all) it filters by the EVENT date instead, since that's
+// the only date that means anything for those. Everything is sorted by
+// event date so upcoming jobs are easy to scan either way.
+function getManualCateringOrders(start, end) {
+  return db
+    .prepare(
+      "SELECT * FROM catering_orders_manual WHERE substr(event_date, 1, 10) >= ? AND substr(event_date, 1, 10) <= ? ORDER BY event_date"
+    )
+    .all(start, end)
+    .map((row) => ({
+      orderId: `manual-${row.id}`,
+      source: "manual",
+      state: null,
+      createdAt: row.created_at,
+      total: row.total_cents !== null ? row.total_cents / 100 : null,
+      lineItems: JSON.parse(row.items_json),
+      customer: row.customer_name || "",
+      phone: row.phone || "",
+      email: row.email || "",
+      eventDate: row.event_date || "",
+      fulfillment: row.fulfillment || "",
+      address: row.address || "",
+      notes: row.notes || "",
+    }));
+}
+
 app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), async (req, res) => {
   const today = melbourneDateString();
   const start = req.query.start || addDays(today, -30);
@@ -1480,11 +1506,76 @@ app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), async (req, re
   }
 
   try {
-    const orders = await buildCateringOrders(start, end);
+    const squareOrders = (await buildCateringOrders(start, end)).map((o) => ({ ...o, source: "square" }));
+    const manualOrders = getManualCateringOrders(start, end);
+    const orders = [...squareOrders, ...manualOrders].sort((a, b) => (a.eventDate || "").localeCompare(b.eventDate || ""));
     res.render("kitchen-catering", { start, end, orders, error: null });
   } catch (err) {
-    res.render("kitchen-catering", { start, end, orders: [], error: err.message });
+    res.render("kitchen-catering", { start, end, orders: getManualCateringOrders(start, end), error: err.message });
   }
+});
+
+// Manually-taken catering orders never create a Square order (WhatsApp,
+// phone, email), so there is nothing to pull live for them — this is
+// where one gets entered once, instead of me adding it by hand each time.
+app.get("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
+  res.render("kitchen-catering-add", { error: null, values: {} });
+});
+
+// Each item line is kept mostly as typed/pasted — a trailing "× N" / "x N"
+// is read as the quantity, and the first "$amount" anywhere in the line
+// (if any) as that line's price; most lines from a forwarded WhatsApp/email
+// order have no per-line price at all, which is fine — the order's own
+// Total $ field (optional) is what matters for the dollar figure.
+function parseManualCateringItems(text) {
+  return (text || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const qtyMatch = line.match(/[×x]\s*(\d+)\s*$/i);
+      const qty = qtyMatch ? Number(qtyMatch[1]) : 1;
+      const name = qtyMatch ? line.slice(0, qtyMatch.index).trim() : line;
+      const priceMatch = line.match(/\$(\d+(?:\.\d{1,2})?)/);
+      const amount = priceMatch ? Number(priceMatch[1]) : 0;
+      return { name, qty, amount };
+    });
+}
+
+app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
+  const { customer_name, phone, email, event_date, fulfillment, address, notes, items_text, total } = req.body;
+
+  if (!event_date || !event_date.trim() || !items_text || !items_text.trim()) {
+    return res.render("kitchen-catering-add", {
+      error: "Event date and at least one item are required.",
+      values: req.body,
+    });
+  }
+
+  const items = parseManualCateringItems(items_text);
+  const totalCents = total && total.trim() !== "" ? Math.round(Number(total) * 100) : null;
+
+  db.prepare(
+    `INSERT INTO catering_orders_manual
+       (customer_name, phone, email, event_date, fulfillment, address, notes, items_json, total_cents)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    (customer_name || "").trim(),
+    (phone || "").trim(),
+    (email || "").trim(),
+    event_date.trim(),
+    (fulfillment || "").trim(),
+    (address || "").trim(),
+    (notes || "").trim(),
+    JSON.stringify(items),
+    totalCents
+  );
+
+  res.redirect(
+    `/kitchen/catering?start=${encodeURIComponent(event_date.trim().slice(0, 10))}&end=${encodeURIComponent(
+      event_date.trim().slice(0, 10)
+    )}`
+  );
 });
 
 // The original exact-term search — pick shops, item name(s), and a date

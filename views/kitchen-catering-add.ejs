@@ -1,0 +1,60 @@
+<%- include('partials/head', { title: "Add Catering Order — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/catering">&larr; Catering</a></p>
+  <h1>Add a catering order</h1>
+  <p class="subtitle">
+    For an order taken by phone, WhatsApp or email — one that never went through the online checkout, so there's
+    nothing to pull in from Square automatically. Paste in whatever you have; it doesn't need to be tidy.
+  </p>
+
+  <% if (error) { %>
+    <p class="error"><%= error %></p>
+  <% } %>
+
+  <form method="POST" action="/kitchen/catering/add" class="card">
+    <label for="event_date">Event date (required — e.g. "2026-11-21" or "2026-11-21 at 07:30" or "2026-11-07 by 11:00am (pickup)")</label>
+    <input type="text" id="event_date" name="event_date" value="<%= values.event_date || '' %>" placeholder="2026-11-21 at 07:30" required />
+
+    <div style="margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+      <div>
+        <label for="customer_name">Customer name</label>
+        <input type="text" id="customer_name" name="customer_name" value="<%= values.customer_name || '' %>" />
+      </div>
+      <div>
+        <label for="phone">Phone</label>
+        <input type="text" id="phone" name="phone" value="<%= values.phone || '' %>" />
+      </div>
+      <div>
+        <label for="email">Email</label>
+        <input type="text" id="email" name="email" value="<%= values.email || '' %>" />
+      </div>
+    </div>
+
+    <div style="margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+      <div>
+        <label for="fulfillment">Fulfillment (delivery/pickup, time, distance)</label>
+        <input type="text" id="fulfillment" name="fulfillment" value="<%= values.fulfillment || '' %>" placeholder="Pickup by 11:00am" />
+      </div>
+      <div>
+        <label for="total">Order total $ (optional — leave blank if not given)</label>
+        <input type="text" id="total" name="total" value="<%= values.total || '' %>" placeholder="345" />
+      </div>
+    </div>
+
+    <label for="address" style="margin-top: 16px;">Address (for delivery — leave blank for pickup)</label>
+    <input type="text" id="address" name="address" value="<%= values.address || '' %>" />
+
+    <label for="items_text" style="margin-top: 16px;">Items — one per line, pasted as-is (a trailing "× 10" is read as quantity; a "$" anywhere in the line is read as that line's price)</label>
+    <textarea id="items_text" name="items_text" rows="8" placeholder="Strawberry Matcha (330ml · Skinny) × 10&#10;Iced Latte (330ml · Oat) × 10" required><%= values.items_text || '' %></textarea>
+
+    <label for="notes" style="margin-top: 16px;">Notes</label>
+    <textarea id="notes" name="notes" rows="3"><%= values.notes || '' %></textarea>
+
+    <button class="btn btn-filled" type="submit" style="margin-top: 20px;">Add order</button>
+  </form>
+</div>
+
+</body>
+</html>
