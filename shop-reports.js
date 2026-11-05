@@ -92,7 +92,11 @@ function melbourneHourOf(date) {
   );
 }
 
-async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, endUtc) {
+// states defaults to COMPLETED-only since every other caller is reporting
+// real sales — an unpaid/open order shouldn't count as revenue. Catering is
+// the one caller that needs OPEN orders too (an order awaiting payment is
+// still something the kitchen needs to plan around).
+async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, endUtc, states = ["COMPLETED"]) {
   const orders = [];
   let cursor;
   do {
@@ -108,7 +112,7 @@ async function fetchSquareOrders(squareTokenEnvVar, squareLocationId, startUtc, 
             date_time_filter: {
               created_at: { start_at: startUtc.toISOString(), end_at: endUtc.toISOString() },
             },
-            state_filter: { states: ["COMPLETED"] },
+            state_filter: { states },
           },
           sort: { sort_field: "CREATED_AT", sort_order: "ASC" },
         },
@@ -555,6 +559,67 @@ async function buildItemSalesSearch(shopSlugs, searchTerms, startDateStr, endDat
 
 function money(n) {
   return `$${n.toFixed(2)}`;
+}
+
+// ---- Catering orders --------------------------------------------------
+// The separate QTR Catering checkout (a different site entirely) creates
+// real Square orders via a payment link — they land in Square under the
+// Essendon location/token (that's just which Square account the catering
+// checkout happens to be wired to), tagged with a distinctive
+// "Event Date: ..." marker in customer_note that a normal in-store Essendon
+// POS sale never has. Catering is its own admin section, not nested under
+// Essendon — this is purely plumbing, not something the admin should need
+// to know about.
+const CATERING_SQUARE_TOKEN_ENV_VAR = "SQUARE_ACCESS_TOKEN";
+const CATERING_SQUARE_LOCATION_ID = "LJWTC3VTB52T3";
+
+function parseCateringNote(note) {
+  const get = (label) => {
+    const re = new RegExp(`${label}:\\s*([^|]*)`);
+    const m = (note || "").match(re);
+    return m ? m[1].trim() : "";
+  };
+  return {
+    customer: get("Customer"),
+    phone: get("Phone"),
+    email: get("Email"),
+    eventDate: get("Event Date"),
+    fulfillment: get("Fulfillment"),
+    address: get("Address"),
+    notes: get("Notes"),
+  };
+}
+
+// startDateStr/endDateStr filter by when the order was PLACED (Square has
+// no native "event date" field — it only exists as text inside
+// customer_note), so results are sorted by the parsed event date to make
+// browsing upcoming jobs easy regardless of when each was booked.
+async function buildCateringOrders(startDateStr, endDateStr) {
+  if (!process.env[CATERING_SQUARE_TOKEN_ENV_VAR]) throw new Error("Square (catering) not connected");
+  const { startUtc } = melbourneDayRangeUtc(startDateStr);
+  const { endUtc } = melbourneDayRangeUtc(endDateStr);
+  const orders = await fetchSquareOrders(CATERING_SQUARE_TOKEN_ENV_VAR, CATERING_SQUARE_LOCATION_ID, startUtc, endUtc, [
+    "OPEN",
+    "COMPLETED",
+  ]);
+
+  const catering = orders
+    .filter((o) => (o.customer_note || "").includes("Event Date:"))
+    .map((o) => ({
+      orderId: o.id,
+      state: o.state,
+      createdAt: o.created_at,
+      total: (o.total_money?.amount || 0) / 100,
+      lineItems: (o.line_items || []).map((li) => ({
+        name: (li.name || "").trim(),
+        qty: Number(li.quantity) || 0,
+        amount: (li.total_money?.amount || 0) / 100,
+      })),
+      ...parseCateringNote(o.customer_note),
+    }));
+
+  catering.sort((a, b) => (a.eventDate || "").localeCompare(b.eventDate || ""));
+  return catering;
 }
 
 function formatSalesSearchEmail(result) {
@@ -1374,4 +1439,5 @@ module.exports = {
   formatSalesSearchEmail,
   buildNaturalSearch,
   formatNaturalSearchEmail,
+  buildCateringOrders,
 };

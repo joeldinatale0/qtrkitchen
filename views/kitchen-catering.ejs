@@ -1,0 +1,78 @@
+<%- include('partials/head', { title: "Catering — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
+  <h1>Catering</h1>
+  <p class="subtitle">
+    Every QTR Catering order, from the separate catering checkout — not tied to any one shop. The date range below
+    filters by when the order was <strong>placed</strong>; results are sorted by the <strong>event date</strong>
+    so upcoming jobs are easy to scan.
+  </p>
+
+  <% if (error) { %>
+    <p class="error"><%= error %></p>
+  <% } %>
+
+  <form method="GET" action="/kitchen/catering" class="card">
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end;">
+      <div>
+        <label for="start">Orders placed from</label>
+        <input type="date" id="start" name="start" value="<%= start %>" required />
+      </div>
+      <div>
+        <label for="end">to</label>
+        <input type="date" id="end" name="end" value="<%= end %>" required />
+      </div>
+      <button class="btn btn-filled" type="submit">Filter</button>
+    </div>
+  </form>
+
+  <% if (!error && orders.length === 0) { %>
+    <p class="muted" style="margin-top: 24px;">No catering orders placed in that range.</p>
+  <% } %>
+
+  <% orders.forEach(function(o) { %>
+    <div class="card eod-card" style="margin-top: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <p class="item-name" style="font-size: 18px; margin-bottom: 2px;">
+            Event date: <%= o.eventDate || "not given" %>
+          </p>
+          <p class="muted" style="margin: 0;">Order placed <%= new Date(o.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" }) %></p>
+        </div>
+        <span class="btn btn-small" style="pointer-events: none; <%= o.state === 'COMPLETED' ? 'background: var(--qtr-baby-blue, #C6D7E8); color: #1A1A18;' : 'background: #f0d8a8; color: #1A1A18;' %>">
+          <%= o.state === 'COMPLETED' ? 'Paid' : 'Awaiting payment' %>
+        </span>
+      </div>
+
+      <div style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px;">
+        <p style="margin: 0;"><strong><%= o.customer || "(no name)" %></strong></p>
+        <p class="muted" style="margin: 0;"><%= o.phone || "" %></p>
+        <p class="muted" style="margin: 0;"><%= o.email || "" %></p>
+        <% if (o.fulfillment) { %><p class="muted" style="margin: 0;">Fulfillment: <%= o.fulfillment %></p><% } %>
+        <% if (o.address) { %><p class="muted" style="margin: 0;">Address: <%= o.address %></p><% } %>
+      </div>
+
+      <div style="margin-top: 12px;">
+        <% o.lineItems.forEach(function(li) { %>
+          <div style="display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0;">
+            <span><%= li.qty %> &times; <%= li.name %></span>
+            <span>$<%= li.amount.toFixed(2) %></span>
+          </div>
+        <% }) %>
+        <div style="display: flex; justify-content: space-between; font-weight: 600; border-top: 1px solid #e0dcd3; margin-top: 6px; padding-top: 6px;">
+          <span>Total</span>
+          <span>$<%= o.total.toFixed(2) %></span>
+        </div>
+      </div>
+
+      <% if (o.notes) { %>
+        <p class="muted" style="margin-top: 10px; margin-bottom: 0;">Notes: <%= o.notes %></p>
+      <% } %>
+    </div>
+  <% }) %>
+</div>
+
+</body>
+</html>

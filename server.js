@@ -19,6 +19,7 @@ const {
   formatSalesSearchEmail,
   buildNaturalSearch,
   formatNaturalSearchEmail,
+  buildCateringOrders,
 } = require("./shop-reports");
 
 const app = express();
@@ -1457,6 +1458,33 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
     reportsEmail: DAILY_REPORT_EMAIL_TO,
     aiConfigured: true,
   });
+});
+
+// Catering orders — its own admin section (not nested under any shop,
+// even though the catering checkout happens to post into the Essendon
+// Square account under the hood). Date range filters by when the order
+// was PLACED; results are sorted by the catering EVENT date so upcoming
+// jobs are easy to scan regardless of when each was booked.
+app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const today = melbourneDateString();
+  const start = req.query.start || addDays(today, -30);
+  const end = req.query.end || today;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+    return res.render("kitchen-catering", {
+      start,
+      end,
+      orders: [],
+      error: "Pick a valid start and end date (start must be before end).",
+    });
+  }
+
+  try {
+    const orders = await buildCateringOrders(start, end);
+    res.render("kitchen-catering", { start, end, orders, error: null });
+  } catch (err) {
+    res.render("kitchen-catering", { start, end, orders: [], error: err.message });
+  }
 });
 
 // The original exact-term search — pick shops, item name(s), and a date
