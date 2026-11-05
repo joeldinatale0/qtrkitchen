@@ -13,6 +13,13 @@
     the <strong>event date</strong>, since that is the only date those have. Everything is sorted by event date.
   </p>
 
+  <% if (loading) { %>
+    <div class="success-banner">
+      Fetching online catering orders from Square — this page will refresh itself in a few seconds. Manually-added
+      orders below are already up to date.
+    </div>
+    <script>setTimeout(function () { location.reload(); }, 5000);</script>
+  <% } %>
   <% if (error) { %>
     <p class="error"><%= error %></p>
   <% } %>

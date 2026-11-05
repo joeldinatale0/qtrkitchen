@@ -1491,7 +1491,38 @@ function getManualCateringOrders(start, end) {
     }));
 }
 
-app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), async (req, res) => {
+// The Square side of this page pages through EVERY order Essendon takes
+// (not just catering ones) before filtering down to the handful that are
+// catering — for a shop as busy as Essendon that can take minutes, so the
+// page must never block directly on it (that is exactly what froze it).
+// Cache the fetched result per date range and refresh it in the
+// background; the page always responds instantly, from whatever is
+// cached (empty + "fetching" the very first time a range is opened).
+const cateringSquareCache = new Map(); // "start|end" -> { orders, error, fetchedAt }
+let cateringFetchInProgress = false;
+const CATERING_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function startCateringFetch(start, end) {
+  if (cateringFetchInProgress) return;
+  cateringFetchInProgress = true;
+  const key = `${start}|${end}`;
+  buildCateringOrders(start, end)
+    .then((orders) => {
+      cateringSquareCache.set(key, {
+        orders: orders.map((o) => ({ ...o, source: "square" })),
+        error: null,
+        fetchedAt: Date.now(),
+      });
+    })
+    .catch((err) => {
+      cateringSquareCache.set(key, { orders: [], error: err.message, fetchedAt: Date.now() });
+    })
+    .finally(() => {
+      cateringFetchInProgress = false;
+    });
+}
+
+app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), (req, res) => {
   const today = melbourneDateString();
   const start = req.query.start || addDays(today, -30);
   const end = req.query.end || today;
@@ -1502,17 +1533,26 @@ app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), async (req, re
       end,
       orders: [],
       error: "Pick a valid start and end date (start must be before end).",
+      loading: false,
     });
   }
 
-  try {
-    const squareOrders = (await buildCateringOrders(start, end)).map((o) => ({ ...o, source: "square" }));
-    const manualOrders = getManualCateringOrders(start, end);
-    const orders = [...squareOrders, ...manualOrders].sort((a, b) => (a.eventDate || "").localeCompare(b.eventDate || ""));
-    res.render("kitchen-catering", { start, end, orders, error: null });
-  } catch (err) {
-    res.render("kitchen-catering", { start, end, orders: getManualCateringOrders(start, end), error: err.message });
-  }
+  const key = `${start}|${end}`;
+  const cached = cateringSquareCache.get(key);
+  const stale = !cached || Date.now() - cached.fetchedAt > CATERING_CACHE_TTL_MS;
+  if (stale) startCateringFetch(start, end);
+
+  const manualOrders = getManualCateringOrders(start, end);
+  const squareOrders = cached ? cached.orders : [];
+  const orders = [...squareOrders, ...manualOrders].sort((a, b) => (a.eventDate || "").localeCompare(b.eventDate || ""));
+
+  res.render("kitchen-catering", {
+    start,
+    end,
+    orders,
+    error: cached && cached.error ? cached.error : null,
+    loading: stale,
+  });
 });
 
 // Manually-taken catering orders never create a Square order (WhatsApp,
