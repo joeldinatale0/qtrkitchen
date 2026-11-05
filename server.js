@@ -1524,8 +1524,11 @@ function startCateringFetch(start, end) {
 
 app.get("/kitchen/catering", requireAuth, requireRole("kitchen"), (req, res) => {
   const today = melbourneDateString();
-  const start = req.query.start || addDays(today, -30);
-  const end = req.query.end || today;
+  // Default to recent-past + upcoming — catering browsing is mostly about
+  // what's coming up (manual orders filter by event date), not the last
+  // month of orders placed, which skews backward-only.
+  const start = req.query.start || addDays(today, -14);
+  const end = req.query.end || addDays(today, 60);
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
     return res.render("kitchen-catering", {
