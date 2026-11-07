@@ -903,6 +903,28 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   res.redirect(`/order/complete?date=${deliveryDate}`);
 });
 
+// Sends a sample order email with one item per kitchen section, so the
+// grouped layout can be checked without touching real order data (nothing
+// here is written to orders/order_items).
+app.post("/kitchen/admin/test-order-email", requireAuth, requireRole("kitchen"), (req, res) => {
+  if (!process.env.GMAIL_APP_PASSWORD) return res.status(400).json({ error: "GMAIL_APP_PASSWORD is missing" });
+
+  const sampleItems = [
+    { name: "Ham Cheese Toastie", unit: "ea", quantity: 9, kitchenSection: "toasties" },
+    { name: "Egg & Bacon Muffin", unit: "ea", quantity: 11, kitchenSection: "muffins_burgers" },
+    { name: "Egg & Bacon Wrap", unit: "ea", quantity: 12, kitchenSection: "wraps" },
+    { name: "Carrot Cake", unit: "cake", quantity: 2, kitchenSection: "baked_goods" },
+    { name: "Oats - Nutella", unit: "ea", quantity: 15, kitchenSection: "grab_n_go" },
+    { name: "Watermelon Juice", unit: "2L", quantity: 1, kitchenSection: "juices" },
+    { name: "Ham", unit: "ea", quantity: 1, kitchenSection: "extras" },
+  ];
+  sendOrderEmail({ name: "TEST Shop" }, "Friday 6 November 2026 (TEST — sample order, ignore)", sampleItems, [
+    "Sample custom request — ignore",
+  ], false, false);
+
+  res.json({ ok: true, to: EMAIL_TO });
+});
+
 app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
   const deliveryDate = req.query.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate || "")) return res.redirect("/order/select-date");
