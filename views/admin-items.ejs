@@ -30,6 +30,11 @@
                 <option value="<%= s.id %>" <%= item.shop_id === s.id ? 'selected' : '' %>><%= s.name %></option>
               <% }) %>
             </select>
+            <select name="kitchen_section" class="admin-item-shop" title="Kitchen prep station for the food order email">
+              <% kitchenSections.forEach(function(sec) { %>
+                <option value="<%= sec.key %>" <%= item.kitchen_section === sec.key ? 'selected' : '' %>><%= sec.label %></option>
+              <% }) %>
+            </select>
             <button class="btn btn-small" type="submit">Save</button>
           </form>
           <form class="inline-form" method="POST" action="/kitchen/items/<%= item.id %>/toggle">
@@ -54,6 +59,11 @@
           <option value="">All shops</option>
           <% shops.forEach(function(s) { %>
             <option value="<%= s.id %>"><%= s.name %></option>
+          <% }) %>
+        </select>
+        <select name="kitchen_section" style="width: 170px;" title="Kitchen prep station for the food order email">
+          <% kitchenSections.forEach(function(sec) { %>
+            <option value="<%= sec.key %>"><%= sec.label %></option>
           <% }) %>
         </select>
         <button class="btn btn-small" type="submit">Add Item</button>

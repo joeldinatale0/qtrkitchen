@@ -37,6 +37,20 @@ const EMAIL_TO = process.env.ORDER_EMAIL_TO || "qtrcentralkitchen@gmail.com";
 const DAILY_REPORT_EMAIL_TO = process.env.DAILY_REPORT_EMAIL_TO || "thecoffeeqtr@gmail.com";
 const ORDER_CUTOFF_HOUR = 14; // 2:00 PM
 
+// Kitchen prep stations, in the order the food order email lists them —
+// matches how the kitchen physically works through an order, not the
+// shop-facing ordering menu's browsing categories.
+const KITCHEN_SECTION_ORDER = ["toasties", "muffins_burgers", "wraps", "baked_goods", "grab_n_go", "juices", "extras"];
+const KITCHEN_SECTION_LABELS = {
+  toasties: "Toasties",
+  muffins_burgers: "Egg Muffins & Burgers",
+  wraps: "Wraps",
+  baked_goods: "Homemade Baked Goods",
+  grab_n_go: "Grab n Go",
+  juices: "Juices",
+  extras: "Extras",
+};
+
 // Every email in the app sends through Gmail (an App Password on
 // qtrcentralkitchen@gmail.com), not Resend — Resend's sandbox mode only
 // delivers to one pre-verified address until a domain is verified there,
@@ -83,7 +97,24 @@ function isLateSubmission() {
 function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit) {
   if (!process.env.GMAIL_APP_PASSWORD) return;
 
-  const lines = orderedItems.map((i) => `  - ${i.quantity} x ${i.name} (${i.unit})`);
+  // Grouped by kitchen prep station, in KITCHEN_SECTION_ORDER, so the
+  // kitchen can work straight down the email station by station instead of
+  // hunting through one flat list.
+  const bySection = {};
+  for (const i of orderedItems) {
+    const section = KITCHEN_SECTION_ORDER.includes(i.kitchenSection) ? i.kitchenSection : "extras";
+    if (!bySection[section]) bySection[section] = [];
+    bySection[section].push(i);
+  }
+
+  const lines = [];
+  for (const section of KITCHEN_SECTION_ORDER) {
+    const items = bySection[section];
+    if (!items || !items.length) continue;
+    if (lines.length) lines.push("");
+    lines.push(`${KITCHEN_SECTION_LABELS[section]}:`);
+    items.forEach((i) => lines.push(`  - ${i.quantity} x ${i.name} (${i.unit})`));
+  }
   if (customNotes.length) {
     lines.push("", "Custom requests:");
     customNotes.forEach((note) => lines.push(`  - ${note}`));
@@ -854,7 +885,7 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
     }
     if (qty && qty > 0) {
       insertOrderItem.run(order.id, item.id, item.name, item.unit, qty, stock, null);
-      orderedItems.push({ name: item.name, unit: item.unit, quantity: qty });
+      orderedItems.push({ name: item.name, unit: item.unit, quantity: qty, kitchenSection: item.kitchen_section });
     }
   }
 
@@ -1240,42 +1271,47 @@ app.get("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
     cat.items = items.filter((i) => i.category_id === cat.id);
   });
   const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
-  res.render("admin-items", { categories, shops, saved: req.query.saved === "1" });
+  const kitchenSections = KITCHEN_SECTION_ORDER.map((key) => ({ key, label: KITCHEN_SECTION_LABELS[key] }));
+  res.render("admin-items", { categories, shops, kitchenSections, saved: req.query.saved === "1" });
 });
 
 app.post("/kitchen/items", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { category_id, name, unit, price, shop_id } = req.body;
+  const { category_id, name, unit, price, shop_id, kitchen_section } = req.body;
   if (name && name.trim() && category_id) {
     const maxOrder = db
       .prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM items WHERE category_id = ?")
       .get(category_id).m;
     const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
     const shopIdVal = shop_id && shop_id.trim() !== "" ? parseInt(shop_id, 10) : null;
+    const sectionVal = KITCHEN_SECTION_ORDER.includes(kitchen_section) ? kitchen_section : "extras";
     db.prepare(
-      "INSERT INTO items (category_id, name, unit, sort_order, price, shop_id) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO items (category_id, name, unit, sort_order, price, shop_id, kitchen_section) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).run(
       category_id,
       name.trim(),
       (unit || "ea").trim(),
       maxOrder + 1,
       isNaN(priceVal) ? null : priceVal,
-      isNaN(shopIdVal) ? null : shopIdVal
+      isNaN(shopIdVal) ? null : shopIdVal,
+      sectionVal
     );
   }
   res.redirect("/kitchen/items?saved=1");
 });
 
 app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req, res) => {
-  const { name, unit, price, shop_id } = req.body;
+  const { name, unit, price, shop_id, kitchen_section } = req.body;
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item && name && name.trim()) {
     const priceVal = price && price.trim() !== "" ? parseFloat(price) : null;
     const shopIdVal = shop_id && shop_id.trim() !== "" ? parseInt(shop_id, 10) : null;
-    db.prepare("UPDATE items SET name = ?, unit = ?, price = ?, shop_id = ? WHERE id = ?").run(
+    const sectionVal = KITCHEN_SECTION_ORDER.includes(kitchen_section) ? kitchen_section : item.kitchen_section;
+    db.prepare("UPDATE items SET name = ?, unit = ?, price = ?, shop_id = ?, kitchen_section = ? WHERE id = ?").run(
       name.trim(),
       (unit || "ea").trim(),
       isNaN(priceVal) ? null : priceVal,
       isNaN(shopIdVal) ? null : shopIdVal,
+      sectionVal,
       item.id
     );
   }
@@ -1293,6 +1329,48 @@ app.post("/kitchen/items/:id/toggle", requireAuth, requireRole("kitchen"), (req,
 app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req, res) => {
   db.prepare("DELETE FROM items WHERE id = ?").run(req.params.id);
   res.redirect("/kitchen/items?saved=1");
+});
+
+// TEMP one-time classification of the existing catalog into kitchen
+// prep stations (everything else defaults to 'extras' already). Removed
+// once applied.
+app.post("/kitchen/admin/classify-sections", requireAuth, requireRole("kitchen"), (req, res) => {
+  const MAP = {
+    toasties: [
+      "Ham Cheese Toastie",
+      "Cheese Toastie",
+      "Cheese & Tomato Toastie",
+      "Spanakopita",
+      "Halloumi Pie",
+      "Lamb Ragu Toastie",
+      "Nonnas Meatball Toastie",
+      "Chicken Schnitz Toastie",
+      "Grilled Chicken & Avo Toastie",
+      "Mushroom & Cheese Toastie",
+      "Vegetarian Toastie",
+      "Egg & Bacon Toastie",
+      "Birria Toastie",
+      "Pumpkin and Feta Triangle",
+      "Ham Cheese Croissant",
+    ],
+    muffins_burgers: ["Egg & Bacon Muffin"],
+    wraps: ["Egg & Bacon Wrap", "Egg & Spinach Wrap", "Chicken Caesar Wrap", "Sweet Chilli Chicken Wrap"],
+    baked_goods: ["Carrot Cake", "Banana Bread Loaf", "M&M Cookie", "Choc Chip Cookie", "Sweet Muffins"],
+    grab_n_go: ["Oats - Nutella", "Oats - Vanilla", "Oats - Biscoff", "Berry Chia", "Mango Chia", "Berry Yoghurt", "Mango Yoghurt"],
+    juices: ["Watermelon Juice"],
+  };
+
+  const update = db.prepare("UPDATE items SET kitchen_section = ? WHERE name = ?");
+  const applied = [];
+  const missing = [];
+  for (const [section, names] of Object.entries(MAP)) {
+    for (const name of names) {
+      const result = update.run(section, name);
+      if (result.changes > 0) applied.push(`${name} -> ${section}`);
+      else missing.push(name);
+    }
+  }
+  res.type("text/plain").send(`Applied:\n${applied.join("\n")}\n\nNot found (check spelling):\n${missing.join("\n")}`);
 });
 
 // ---------- Kitchen: daily shop reports (Square + Tanda) ----------

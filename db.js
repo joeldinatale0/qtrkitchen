@@ -291,6 +291,11 @@ ensureColumn("order_items", "current_stock", "INTEGER");
 ensureColumn("shop_item_pars", "par_level_weekend", "INTEGER");
 ensureColumn("items", "price", "REAL");
 ensureColumn("items", "shop_id", "INTEGER REFERENCES users(id)"); // NULL = visible to all shops; set = that shop only
+// Which kitchen prep station an item belongs to, for grouping the food
+// order email the way the kitchen actually works (toasties together,
+// wraps together, etc) — independent of the shop-facing ordering menu
+// categories, which are organized for browsing, not prep.
+ensureColumn("items", "kitchen_section", "TEXT NOT NULL DEFAULT 'extras'");
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
