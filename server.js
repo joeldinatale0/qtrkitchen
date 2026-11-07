@@ -1101,6 +1101,35 @@ app.get(
   }
 );
 
+// Rebuilds and re-emails an already-sent weekly invoice — e.g. after
+// fixing item prices, so the PDF reflects the correction. Independent of
+// invoice_log (which only gates the automatic Sunday send), so this can be
+// triggered any time without affecting that schedule.
+app.post("/kitchen/shop/:slug/invoices/:weekStart/resend", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).json({ error: "Shop not found" });
+  if (!process.env.GMAIL_APP_PASSWORD) return res.status(400).json({ error: "GMAIL_APP_PASSWORD is missing" });
+
+  try {
+    const weekStart = req.params.weekStart;
+    const weekEnd = addDays(weekStart, 6);
+    const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
+    const pdfBuffer = await buildWeeklySummaryPdf(shop, formatDate(weekStart), formatDate(weekEnd), dailyBreakdown, weeklyTotals);
+
+    const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
+    await sendEmail({
+      to,
+      subject: `RESENT Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
+      text: `Re-sent: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
+      attachments: [{ filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`, content: pdfBuffer.toString("base64") }],
+    });
+
+    res.json({ ok: true, to });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/kitchen/shop/:slug/cogs", requireAuth, requireRole("kitchen"), (req, res) => {
   const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
   if (!shop) return res.status(404).send("Shop not found");

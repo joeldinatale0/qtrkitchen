@@ -21,6 +21,10 @@
               <td><%= w.sent_at %></td>
               <td>
                 <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/invoices/<%= w.week_start_date %>.pdf" target="_blank">View PDF</a>
+                <form class="inline-form" method="POST" action="/kitchen/shop/<%= shop.slug %>/invoices/<%= w.week_start_date %>/resend"
+                      onsubmit="event.preventDefault(); fetch(this.action,{method:'POST'}).then(r=>r.json()).then(d=>alert(d.ok ? ('Resent to '+d.to) : ('Failed: '+d.error)));">
+                  <button class="btn btn-small" type="submit">Resend</button>
+                </form>
               </td>
             </tr>
           <% }) %>
