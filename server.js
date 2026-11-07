@@ -244,13 +244,14 @@ async function sendWeeklySummaryIfDue() {
   if (todayDow !== 0) return;
   if (melbourneHour() < 5) return; // Sunday 5:00 AM Melbourne time
 
-  // The invoiced week runs Sunday-Saturday by DELIVERY date: last Sunday's
-  // order (delivered Monday) through yesterday (Saturday)'s delivery.
-  // Today's own order — placed later this same Sunday, for tomorrow's
-  // Monday delivery — deliberately falls outside this window; it starts
-  // next week's invoice instead, not this one.
-  const weekStart = addDays(today, -7);
-  const weekEnd = addDays(today, -1);
+  // The invoiced week runs Monday-Sunday by DELIVERY date: Monday's
+  // delivery (from last Sunday's order) through TODAY's own delivery (from
+  // yesterday/Saturday's order, already locked in by 5am). A full 7 days.
+  // The order placed later today (Sunday, after this invoice goes out) is
+  // for tomorrow's Monday delivery, which deliberately falls outside this
+  // window — it starts next week's invoice instead, not this one.
+  const weekStart = addDays(today, -6);
+  const weekEnd = today;
 
   const shops = db.prepare("SELECT * FROM users WHERE role = 'shop'").all();
 
