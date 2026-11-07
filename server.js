@@ -240,11 +240,17 @@ function buildWeeklyInvoiceData(shopId, weekStart, weekEnd) {
 async function sendWeeklySummaryIfDue() {
   if (!process.env.GMAIL_APP_PASSWORD) return;
   const today = melbourneDateString();
-  const todayDow = new Date(today + "T00:00:00").getDay(); // 1 = Monday
-  if (todayDow !== 1) return;
-  if (melbourneHour() < 5) return; // Monday 5:00 AM Melbourne time
+  const todayDow = new Date(today + "T00:00:00").getDay(); // 0 = Sunday
+  if (todayDow !== 0) return;
+  if (melbourneHour() < 5) return; // Sunday 5:00 AM Melbourne time
 
-  const { weekStart, weekEnd } = weekBounds(addDays(today, -1)); // the week that just ended (yesterday = Sunday)
+  // The invoiced week runs Sunday-Saturday by DELIVERY date: last Sunday's
+  // order (delivered Monday) through yesterday (Saturday)'s delivery.
+  // Today's own order — placed later this same Sunday, for tomorrow's
+  // Monday delivery — deliberately falls outside this window; it starts
+  // next week's invoice instead, not this one.
+  const weekStart = addDays(today, -7);
+  const weekEnd = addDays(today, -1);
 
   const shops = db.prepare("SELECT * FROM users WHERE role = 'shop'").all();
 
@@ -538,15 +544,6 @@ function tomorrow() {
 function isWeekendDate(isoDate) {
   const day = new Date(isoDate + "T00:00:00").getDay(); // 0 = Sunday, 6 = Saturday
   return day === 0 || day === 6;
-}
-
-// Mon-Sun week containing isoDate; returns { weekStart, weekEnd } as ISO date strings.
-function weekBounds(isoDate) {
-  const day = new Date(isoDate + "T00:00:00").getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day; // distance back to Monday
-  const weekStart = addDays(isoDate, mondayOffset);
-  const weekEnd = addDays(weekStart, 6);
-  return { weekStart, weekEnd };
 }
 
 function effectivePar(parRow, isoDate) {
@@ -1080,7 +1077,12 @@ app.get(
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.weekStart)) return res.status(400).send("Invalid week");
 
     try {
-      const { weekStart, weekEnd } = weekBounds(req.params.weekStart);
+      // weekStart here is already an authoritative week-start value as
+      // stored in invoice_log — Monday for older invoices, Sunday going
+      // forward — never re-snap it to a canonical weekday, just take the
+      // 7-day window starting there, exactly as it was actually invoiced.
+      const weekStart = req.params.weekStart;
+      const weekEnd = addDays(weekStart, 6);
       const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
       const pdfBuffer = await buildWeeklySummaryPdf(
         shop,
