@@ -1805,6 +1805,23 @@ app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"
   });
 });
 
+// TEMP diagnostic — dump recent saved daily_shop_snapshots rows to see the
+// actual labour %/cost numbers that were computed and emailed, before
+// guessing at why they look off. Removed once that's diagnosed.
+app.get("/kitchen/admin/debug-snapshots", requireAuth, requireRole("kitchen"), (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 90);
+  const rows = db
+    .prepare(
+      "SELECT shop_slug, report_date, net_sales_cents, labour_hours, labour_cost_cents, labour_pct, cogs_pct, prime_cost_pct FROM daily_shop_snapshots ORDER BY report_date DESC LIMIT ?"
+    )
+    .all(days * 3);
+  const lines = rows.map(
+    (r) =>
+      `${r.shop_slug} | ${r.report_date} | net_sales=${(r.net_sales_cents / 100).toFixed(2)} | labour_hours=${r.labour_hours} | labour_cost=${r.labour_cost_cents === null ? "null" : (r.labour_cost_cents / 100).toFixed(2)} | labour_pct=${r.labour_pct === null ? "null" : r.labour_pct.toFixed(1)} | cogs_pct=${r.cogs_pct === null ? "null" : r.cogs_pct.toFixed(1)} | prime_cost_pct=${r.prime_cost_pct === null ? "null" : r.prime_cost_pct.toFixed(1)}`
+  );
+  res.type("text/plain").send(lines.join("\n") || "(no rows)");
+});
+
 // Backfills daily_shop_snapshots for the last `days` days across every
 // shop, so the AI search's "report" domain (COGS %, labour %, prime cost %
 // trend) works for the past too, not just going forward. Runs in the
