@@ -1331,48 +1331,6 @@ app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req,
   res.redirect("/kitchen/items?saved=1");
 });
 
-// TEMP one-time classification of the existing catalog into kitchen
-// prep stations (everything else defaults to 'extras' already). Removed
-// once applied.
-app.post("/kitchen/admin/classify-sections", requireAuth, requireRole("kitchen"), (req, res) => {
-  const MAP = {
-    toasties: [
-      "Ham Cheese Toastie",
-      "Cheese Toastie",
-      "Cheese & Tomato Toastie",
-      "Spanakopita",
-      "Halloumi Pie",
-      "Lamb Ragu Toastie",
-      "Nonnas Meatball Toastie",
-      "Chicken Schnitz Toastie",
-      "Grilled Chicken & Avo Toastie",
-      "Mushroom & Cheese Toastie",
-      "Vegetarian Toastie",
-      "Egg & Bacon Toastie",
-      "Birria Toastie",
-      "Pumpkin and Feta Triangle",
-      "Ham Cheese Croissant",
-    ],
-    muffins_burgers: ["Egg & Bacon Muffin"],
-    wraps: ["Egg & Bacon Wrap", "Egg & Spinach Wrap", "Chicken Caesar Wrap", "Sweet Chilli Chicken Wrap"],
-    baked_goods: ["Carrot Cake", "Banana Bread Loaf", "M&M Cookie", "Choc Chip Cookie", "Sweet Muffins"],
-    grab_n_go: ["Oats - Nutella", "Oats - Vanilla", "Oats - Biscoff", "Berry Chia", "Mango Chia", "Berry Yoghurt", "Mango Yoghurt"],
-    juices: ["Watermelon Juice"],
-  };
-
-  const update = db.prepare("UPDATE items SET kitchen_section = ? WHERE name = ?");
-  const applied = [];
-  const missing = [];
-  for (const [section, names] of Object.entries(MAP)) {
-    for (const name of names) {
-      const result = update.run(section, name);
-      if (result.changes > 0) applied.push(`${name} -> ${section}`);
-      else missing.push(name);
-    }
-  }
-  res.type("text/plain").send(`Applied:\n${applied.join("\n")}\n\nNot found (check spelling):\n${missing.join("\n")}`);
-});
-
 // ---------- Kitchen: daily shop reports (Square + Tanda) ----------
 
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
@@ -1881,23 +1839,6 @@ app.post("/kitchen/admin/update-credentials", requireAuth, requireRole("kitchen"
   req.session.destroy(() => {
     res.json({ ok: true, message: "Credentials updated — log in again with the new username and password." });
   });
-});
-
-// TEMP diagnostic — dump recent saved daily_shop_snapshots rows to see the
-// actual labour %/cost numbers that were computed and emailed, before
-// guessing at why they look off. Removed once that's diagnosed.
-app.get("/kitchen/admin/debug-snapshots", requireAuth, requireRole("kitchen"), (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 90);
-  const rows = db
-    .prepare(
-      "SELECT shop_slug, report_date, net_sales_cents, labour_hours, labour_cost_cents, labour_pct, cogs_pct, prime_cost_pct FROM daily_shop_snapshots ORDER BY report_date DESC LIMIT ?"
-    )
-    .all(days * 3);
-  const lines = rows.map(
-    (r) =>
-      `${r.shop_slug} | ${r.report_date} | net_sales=${(r.net_sales_cents / 100).toFixed(2)} | labour_hours=${r.labour_hours} | labour_cost=${r.labour_cost_cents === null ? "null" : (r.labour_cost_cents / 100).toFixed(2)} | labour_pct=${r.labour_pct === null ? "null" : r.labour_pct.toFixed(1)} | cogs_pct=${r.cogs_pct === null ? "null" : r.cogs_pct.toFixed(1)} | prime_cost_pct=${r.prime_cost_pct === null ? "null" : r.prime_cost_pct.toFixed(1)}`
-  );
-  res.type("text/plain").send(lines.join("\n") || "(no rows)");
 });
 
 // Backfills daily_shop_snapshots for the last `days` days across every
