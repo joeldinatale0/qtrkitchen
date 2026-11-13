@@ -3,9 +3,9 @@
 
 <div class="container">
   <div style="text-align: center; margin-bottom: 40px;">
-    <h1>Order submitted</h1>
+    <h1><%= area === 'paper' ? 'Paper Goods order' : 'Order' %> submitted</h1>
     <p class="subtitle">
-      Your order for <%= formatDate(deliveryDate) %> has been sent to the kitchen.
+      Your <%= area === 'paper' ? 'Paper Goods order' : 'order' %> for <%= formatDate(deliveryDate) %> has been sent to the kitchen.
     </p>
     <% if (isLate) { %>
       <span class="tag-late">Late order</span>
@@ -26,8 +26,8 @@
   </div>
 
   <div class="toolbar" style="justify-content: center; margin-top: 32px;">
-    <a class="btn btn-filled" href="/order?date=<%= deliveryDate %>">Edit this order</a>
-    <a class="btn" href="/order/select-date">Place another order</a>
+    <a class="btn btn-filled" href="<%= area === 'paper' ? '/order/paper-goods' : '/order' %>?date=<%= deliveryDate %>">Edit this order</a>
+    <a class="btn" href="<%= area === 'paper' ? '/order/paper-goods/select-date' : '/order/select-date' %>">Place another order</a>
   </div>
 </div>
 

@@ -2,8 +2,8 @@
 <%- include('partials/topbar') %>
 
 <div class="container">
-  <p class="muted"><a href="/order/select-date">&larr; Change delivery date</a></p>
-  <h1>Order for <%= formatDate(deliveryDate) %></h1>
+  <p class="muted"><a href="<%= area === 'paper' ? '/order/paper-goods/select-date' : '/order/select-date' %>">&larr; Change delivery date</a></p>
+  <h1><%= area === 'paper' ? 'Paper Goods order' : 'Order' %> for <%= formatDate(deliveryDate) %></h1>
   <p class="subtitle">
     Enter quantities for what you need delivered that morning. Orders for the next day are due by
     <%= cutoffHour %>:00 (2:00 PM) — the kitchen preps overnight. You can resubmit any time before then to update your order.
@@ -17,7 +17,7 @@
     <div class="success-banner">You already have an order saved for this date — submitting again will update it.</div>
   <% } %>
 
-  <form method="POST" action="/order">
+  <form method="POST" action="<%= area === 'paper' ? '/order/paper-goods' : '/order' %>">
     <input type="hidden" name="delivery_date" value="<%= deliveryDate %>" />
     <% categories.forEach(function(cat) { %>
       <h2><%= cat.name %></h2>
@@ -85,11 +85,13 @@
       </div>
     <% }) %>
 
-    <h2>Other (Custom Request)</h2>
-    <div class="card">
-      <label for="custom_notes">One request per line</label>
-      <textarea id="custom_notes" name="custom_notes" placeholder="e.g. 2x extra ice bags"><%= existingCustomNotes %></textarea>
-    </div>
+    <% if (area !== 'paper') { %>
+      <h2>Other (Custom Request)</h2>
+      <div class="card">
+        <label for="custom_notes">One request per line</label>
+        <textarea id="custom_notes" name="custom_notes" placeholder="e.g. 2x extra ice bags"><%= existingCustomNotes %></textarea>
+      </div>
+    <% } %>
 
     <button class="btn btn-filled" type="submit">Submit Order</button>
   </form>

@@ -94,7 +94,7 @@ function isLateSubmission() {
 // Fire-and-forget: never block the order-submit response on email delivery.
 // Sent via Resend's HTTPS API (not raw SMTP) since cloud hosts commonly block
 // outbound SMTP ports for spam prevention.
-function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit) {
+function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit, areaLabel) {
   if (!process.env.GMAIL_APP_PASSWORD) return;
 
   // Grouped by kitchen prep station, in KITCHEN_SECTION_ORDER, so the
@@ -129,13 +129,15 @@ function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLa
   const lateNotice = isLate
     ? `This order was submitted after the ${ORDER_CUTOFF_HOUR}:00 cutoff.\n\n`
     : "";
-  const text = `${editNotice}${lateNotice}New order from ${shop.name} for delivery ${deliveryDateLabel}\n\n${lines.join("\n")}\n`;
+  const label = areaLabel ? `${areaLabel} order` : "New order";
+  const text = `${editNotice}${lateNotice}${label} from ${shop.name} for delivery ${deliveryDateLabel}\n\n${lines.join("\n")}\n`;
   const subjectPrefix = isEdit
     ? "THIS IS AN EDITED ORDER! Disregard the last order — "
     : isLate
     ? "LATE ORDER! "
     : "";
-  const subject = `${subjectPrefix}Order from ${shop.name} — delivery ${deliveryDateLabel}`;
+  const subjectArea = areaLabel ? `${areaLabel} order` : "Order";
+  const subject = `${subjectPrefix}${subjectArea} from ${shop.name} — delivery ${deliveryDateLabel}`;
 
   sendEmail({ to: EMAIL_TO, subject, text })
     .then(() => console.log(`Order email sent for ${shop.name}`))
@@ -583,14 +585,6 @@ function requireRole(role) {
   };
 }
 
-function requireShopSlug(slug) {
-  return (req, res, next) => {
-    if (!req.session.user || req.session.user.slug !== slug) {
-      return res.status(403).send("Forbidden");
-    }
-    next();
-  };
-}
 
 app.use((req, res, next) => {
   res.locals.currentUser = req.session.user || null;
@@ -670,6 +664,7 @@ app.get("/order/select-date", requireAuth, requireRole("shop"), (req, res) => {
   res.render("order-select-date", {
     minDate: tomorrow(),
     upcoming,
+    area: "food",
   });
 });
 
@@ -780,7 +775,7 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
   if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
 
   const categories = db
-    .prepare("SELECT * FROM categories WHERE is_custom = 0 ORDER BY sort_order")
+    .prepare("SELECT * FROM categories WHERE is_custom = 0 AND slug != 'paper' ORDER BY sort_order")
     .all();
   const items = db
     .prepare(
@@ -831,6 +826,7 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
     submitted: !!existingOrder,
     isLateNow,
     cutoffHour: ORDER_CUTOFF_HOUR,
+    area: "food",
   });
 });
 
@@ -841,8 +837,15 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   const shopId = req.session.user.id;
   const isLate = deliveryDate === tomorrow() && isLateSubmission();
 
+  // Paper Goods is its own separate ordering area (see /order/paper-goods)
+  // sharing the same orders/order_items tables keyed by delivery date — so
+  // this must only ever touch food-category items, never delete a paper
+  // goods line that was already submitted for the same date.
   const items = db
-    .prepare("SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?)")
+    .prepare(
+      `SELECT i.* FROM items i JOIN categories c ON c.id = i.category_id
+       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug != 'paper'`
+    )
     .all(shopId);
   const parRows = db
     .prepare("SELECT item_id FROM shop_item_pars WHERE shop_id = ?")
@@ -855,7 +858,11 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   const isEdit = !!order;
 
   if (order) {
-    db.prepare("DELETE FROM order_items WHERE order_id = ?").run(order.id);
+    db.prepare(
+      `DELETE FROM order_items WHERE order_id = ? AND (item_id IS NULL OR item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+       ))`
+    ).run(order.id);
     db.prepare(
       "UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ? WHERE id = ?"
     ).run(isLate ? 1 : 0, order.id);
@@ -934,66 +941,164 @@ app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
   if (!order) return res.redirect("/order/select-date");
 
   const orderItems = db
-    .prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id")
+    .prepare(
+      `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND (oi.item_id IS NULL OR oi.item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+       )) ORDER BY oi.id`
+    )
     .all(order.id);
 
-  res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late });
+  res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late, area: "food" });
 });
 
-// ---------- Shop: Del Re supplier ordering (separate from the kitchen flow) ----------
+// ---------- Shop: Paper Goods — its own ordering area, not part of Food Order ----------
+// Shares the same orders/order_items tables as food (keyed by shop_id +
+// delivery_date), scoped strictly to the 'paper' category on every read,
+// write and delete so the two areas never touch each other's lines.
 
-app.get("/delre/order", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
-  const categories = db
-    .prepare("SELECT * FROM delre_categories ORDER BY sort_order")
-    .all();
+app.get("/order/paper-goods/select-date", requireAuth, requireRole("shop"), (req, res) => {
+  const upcoming = db
+    .prepare(
+      `SELECT delivery_date, is_late, status FROM orders
+       WHERE shop_id = ? AND delivery_date >= ?
+       ORDER BY delivery_date ASC`
+    )
+    .all(req.session.user.id, tomorrow());
+
+  res.render("order-select-date", { minDate: tomorrow(), upcoming, area: "paper" });
+});
+
+app.get("/order/paper-goods", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.query.date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/paper-goods/select-date");
+
+  const categories = db.prepare("SELECT * FROM categories WHERE slug = 'paper' ORDER BY sort_order").all();
   const items = db
-    .prepare("SELECT * FROM delre_items WHERE active = 1 ORDER BY sort_order")
-    .all();
+    .prepare("SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?) ORDER BY sort_order")
+    .all(req.session.user.id);
+
+  const existingOrder = db
+    .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+    .get(req.session.user.id, deliveryDate);
+
+  const parRows = db
+    .prepare("SELECT item_id, par_level, par_level_weekend FROM shop_item_pars WHERE shop_id = ?")
+    .all(req.session.user.id);
+  const parByItemId = {};
+  parRows.forEach((p) => (parByItemId[p.item_id] = effectivePar(p, deliveryDate)));
+
+  const existingQuantities = {};
+  const existingStock = {};
+  if (existingOrder) {
+    const orderItems = db.prepare("SELECT * FROM order_items WHERE order_id = ?").all(existingOrder.id);
+    for (const oi of orderItems) {
+      if (oi.item_id) {
+        existingQuantities[oi.item_id] = oi.quantity;
+        if (oi.current_stock !== null) existingStock[oi.item_id] = oi.current_stock;
+      }
+    }
+  }
+
   categories.forEach((cat) => {
     cat.items = items.filter((i) => i.category_id === cat.id);
   });
 
-  res.render("delre-order", { categories });
+  const submitted = categories.some((cat) => cat.items.some((i) => existingQuantities[i.id] !== undefined));
+  const isLateNow = deliveryDate === tomorrow() && isLateSubmission();
+
+  res.render("order", {
+    deliveryDate,
+    categories,
+    parByItemId,
+    existingQuantities,
+    existingStock,
+    existingCustomNotes: "",
+    submitted,
+    isLateNow,
+    cutoffHour: ORDER_CUTOFF_HOUR,
+    area: "paper",
+  });
 });
 
-app.post("/delre/order", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
-  const items = db.prepare("SELECT * FROM delre_items WHERE active = 1").all();
+app.post("/order/paper-goods", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.body.delivery_date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/paper-goods/select-date");
 
-  const { lastInsertRowid: orderId } = db
-    .prepare("INSERT INTO delre_orders (shop_id) VALUES (?)")
-    .run(req.session.user.id);
+  const shopId = req.session.user.id;
+  const isLate = deliveryDate === tomorrow() && isLateSubmission();
 
-  const insertOrderItem = db.prepare(
-    "INSERT INTO delre_order_items (order_id, item_id, name, unit, current_stock, quantity) VALUES (?, ?, ?, ?, ?, ?)"
-  );
+  const items = db
+    .prepare(
+      `SELECT i.* FROM items i JOIN categories c ON c.id = i.category_id
+       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug = 'paper'`
+    )
+    .all(shopId);
+  const parRows = db.prepare("SELECT item_id FROM shop_item_pars WHERE shop_id = ?").all(shopId);
+  const parItemIds = new Set(parRows.map((p) => p.item_id));
 
-  for (const item of items) {
-    const rawQty = req.body[`order_${item.id}`];
-    const qty = parseInt(rawQty, 10);
-    if (!qty || qty <= 0) continue;
-    const rawStock = req.body[`stock_${item.id}`];
-    const stock = rawStock !== undefined && rawStock !== "" ? parseInt(rawStock, 10) : null;
-    insertOrderItem.run(orderId, item.id, item.name, item.unit, stock, qty);
+  let order = db.prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?").get(shopId, deliveryDate);
+  const isEdit = !!order;
+
+  if (order) {
+    db.prepare(
+      `DELETE FROM order_items WHERE order_id = ? AND item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'paper'
+       )`
+    ).run(order.id);
+    db.prepare("UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ? WHERE id = ?").run(
+      isLate ? 1 : 0,
+      order.id
+    );
+  } else {
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO orders (shop_id, delivery_date, is_late) VALUES (?, ?, ?)")
+      .run(shopId, deliveryDate, isLate ? 1 : 0);
+    order = { id: lastInsertRowid };
   }
 
-  res.redirect(`/delre/order/complete?id=${orderId}`);
+  const insertOrderItem = db.prepare(
+    "INSERT INTO order_items (order_id, item_id, name, unit, quantity, current_stock, note) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+
+  const orderedItems = [];
+  for (const item of items) {
+    const raw = req.body[`item_${item.id}`];
+    const qty = parseFloat(raw);
+    let stock = null;
+    if (parItemIds.has(item.id)) {
+      const rawStock = req.body[`stock_${item.id}`];
+      if (rawStock !== undefined && rawStock !== "") stock = parseInt(rawStock, 10);
+    }
+    if (qty && qty > 0) {
+      insertOrderItem.run(order.id, item.id, item.name, item.unit, qty, stock, null);
+      orderedItems.push({ name: item.name, unit: item.unit, quantity: qty, kitchenSection: item.kitchen_section });
+    }
+  }
+
+  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, [], isLate, isEdit, "Paper Goods");
+
+  res.redirect(`/order/paper-goods/complete?date=${deliveryDate}`);
 });
 
-app.get("/delre/order/complete", requireAuth, requireRole("shop"), requireShopSlug("essendon"), (req, res) => {
+app.get("/order/paper-goods/complete", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.query.date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate || "")) return res.redirect("/order/paper-goods/select-date");
+
   const order = db
-    .prepare("SELECT * FROM delre_orders WHERE id = ? AND shop_id = ?")
-    .get(req.query.id, req.session.user.id);
-  if (!order) return res.redirect("/delre/order");
+    .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+    .get(req.session.user.id, deliveryDate);
+
+  if (!order) return res.redirect("/order/paper-goods/select-date");
 
   const orderItems = db
-    .prepare("SELECT * FROM delre_order_items WHERE order_id = ? ORDER BY id")
+    .prepare(
+      `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND oi.item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'paper'
+       ) ORDER BY oi.id`
+    )
     .all(order.id);
 
-  const itemLines = orderItems.map((oi) => `${oi.name} x${oi.quantity} ${oi.unit}`).join("\n");
-  const greeting = `Can I please place an order for Coffee ${req.session.user.name}`;
-  const textList = `${greeting}\n\n${itemLines}`;
-
-  res.render("delre-order-complete", { order, orderItems, textList });
+  res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late, area: "paper" });
 });
 
 // ---------- Kitchen: dashboard ----------
@@ -1181,10 +1286,17 @@ app.get("/kitchen/today", requireAuth, requireRole("kitchen"), (req, res) => {
     .prepare("SELECT * FROM orders WHERE delivery_date = ?")
     .all(deliveryDate);
 
+  // Paper Goods is a separate ordering area, not something the kitchen
+  // preps — excluded from this food prep list the same way everywhere else
+  // keeps the two areas apart.
   const ordersByShopId = {};
   for (const order of orders) {
     const orderItems = db
-      .prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id")
+      .prepare(
+        `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND (oi.item_id IS NULL OR oi.item_id IN (
+           SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+         )) ORDER BY oi.id`
+      )
       .all(order.id);
     ordersByShopId[order.shop_id] = { order, items: orderItems };
   }
@@ -1239,46 +1351,6 @@ app.post("/kitchen/history/clear", requireAuth, requireRole("kitchen"), (req, re
   db.prepare("DELETE FROM order_items").run();
   db.prepare("DELETE FROM orders").run();
   res.redirect("/kitchen/history?cleared=1");
-});
-
-app.get("/kitchen/delre", requireAuth, requireRole("kitchen"), (req, res) => {
-  const orders = db
-    .prepare(
-      `SELECT o.id, o.created_at, u.name AS shop_name,
-              SUM(oi.quantity) AS total_items
-       FROM delre_orders o
-       JOIN users u ON u.id = o.shop_id
-       LEFT JOIN delre_order_items oi ON oi.order_id = o.id
-       GROUP BY o.id
-       ORDER BY o.created_at DESC`
-    )
-    .all();
-
-  res.render("kitchen-delre-history", { orders, cleared: req.query.cleared === "1" });
-});
-
-app.post("/kitchen/delre/clear", requireAuth, requireRole("kitchen"), (req, res) => {
-  db.prepare("DELETE FROM delre_order_items").run();
-  db.prepare("DELETE FROM delre_orders").run();
-  res.redirect("/kitchen/delre?cleared=1");
-});
-
-app.get("/kitchen/delre/:orderId", requireAuth, requireRole("kitchen"), (req, res) => {
-  const order = db
-    .prepare(
-      `SELECT o.id, o.created_at, u.name AS shop_name
-       FROM delre_orders o
-       JOIN users u ON u.id = o.shop_id
-       WHERE o.id = ?`
-    )
-    .get(req.params.orderId);
-  if (!order) return res.redirect("/kitchen/delre");
-
-  const orderItems = db
-    .prepare("SELECT * FROM delre_order_items WHERE order_id = ? ORDER BY id")
-    .all(order.id);
-
-  res.render("kitchen-delre-order", { order, orderItems });
 });
 
 app.get(
