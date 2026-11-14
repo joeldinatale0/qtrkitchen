@@ -723,7 +723,7 @@ function todayMelbourneStr() {
 }
 
 // Step 1: turn the free-text question into which data source(s) it needs
-// (sales/labour/cash/report/invoices), shops, an absolute date range, and —
+// (sales/labour/cash/report/invoices/cogs), shops, an absolute date range, and —
 // for the cash/report domains, which have no messy name-matching problem —
 // which single number (if any) the question cares about and how to rank it.
 async function parseNaturalQuery(queryText) {
@@ -735,14 +735,15 @@ async function parseNaturalQuery(queryText) {
   const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
-{"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
+{"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices" and/or "cogs"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
 Rules for "domains" (include every one the question genuinely touches, usually just one):
 - "sales": what sold, revenue, items, drinks, food (Square — money coming IN from customers).
 - "labour": hours worked, staff, employees, shifts, wages, rostering, labour cost.
 - "cash": EOD cash sheet / till reconciliation data — till counts, cash vs EFTPOS vs Uber sales recorded at close of day, discrepancies, float.
 - "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) — use this for labour % or $ labour cost on ANY day that is not today, even a single day, since live labour cost only exists for today; also use it for a multi-day trend of these numbers. NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
 - "invoices": what a shop was INVOICED/CHARGED by the central kitchen for its weekly food/paper-goods orders — item quantities, prices, weekly totals, whether that week's invoice has been sent. This is a COST going OUT to the shop, the opposite of "sales" — never confuse the two. Use this for "pull up an invoice", "how much was X invoiced", "what did X order last week and what did it cost".
-Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
+- "cogs": the cost to make a specific menu item, or several items combined — the per-item ingredient/COGS cost Joel has priced out per shop, for working out margins, bundle costs, or "what does X actually cost me". Use this for "what's my COGS on X", "combine the cost of X and Y", "what's my margin if I sell X at $Y". NOT the daily aggregate COGS % (that's "report").
+Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". The date range is ignored by "cogs" (those costs aren't time-series) but must still be present and valid. If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
 
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
   const parsed = extractJson(text, "parseNaturalQuery");
@@ -762,7 +763,7 @@ Resolve relative dates ("past 30 days", "last quarter", "this month", "today") i
     throw new Error("Could not resolve a valid date range from the question");
   }
 
-  const validDomains = ["sales", "labour", "cash", "report", "invoices"];
+  const validDomains = ["sales", "labour", "cash", "report", "invoices", "cogs"];
   let domains = Array.isArray(parsed.domains) ? parsed.domains.filter((d) => validDomains.includes(d)) : [];
   if (domains.length === 0) domains = ["sales"];
 
@@ -1397,6 +1398,40 @@ function formatInvoicePart(invoices) {
   return lines.join("\n");
 }
 
+// ---- COGS side of natural-language search ----
+// The per-item cost Joel has priced out himself (see cogs-data.js) — a
+// static map, not a time series, so this ignores the parsed date range
+// entirely. Hands Claude the FULL cost list for the relevant shop(s) as
+// real grounded data, so it can look up one line, combine several, or do
+// margin math itself in the synthesis step below — never a separate
+// name-matching pass like sales needs, since this is Joel's own catalog,
+// not Square's messy real-world item names.
+function buildCogsSearchPart(parse) {
+  const shops = parse.shops.filter((slug) => COGS_BY_SHOP[slug]);
+  const perShop = shops.map((slug) => ({
+    shopName: (SHOP_INTEGRATIONS[slug] || {}).displayName || ALL_SHOP_NAMES[slug] || slug,
+    items: Object.entries(COGS_BY_SHOP[slug])
+      .map(([name, cents]) => ({ name, cost: cents / 100 }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  }));
+  return { perShop };
+}
+
+function formatCogsPart(cogs) {
+  const lines = [`COGS (cost to make each menu item, per shop — Joel's own pricing, not a daily %)`, ``];
+  if (cogs.perShop.length === 0 || cogs.perShop.every((s) => s.items.length === 0)) {
+    lines.push(`No COGS data priced for this shop yet.`);
+    return lines.join("\n");
+  }
+  for (const shop of cogs.perShop) {
+    if (shop.items.length === 0) continue;
+    lines.push(`${shop.shopName}:`);
+    for (const it of shop.items) lines.push(`    ${it.name}: ${money(it.cost)}`);
+    lines.push(``);
+  }
+  return lines.join("\n");
+}
+
 // Final step: hand the original question + the real retrieved numbers to
 // Claude and have it actually answer — including any arithmetic or
 // hypothetical ("what if sales were $2k higher") the question needs. This
@@ -1405,7 +1440,7 @@ function formatInvoicePart(invoices) {
 // reason over it, never invent a figure.
 async function synthesizeAnswer(queryText, dataText) {
   const system = `A cafe owner asked: "${queryText}"
-Below is the real sales/labour/cash/report/invoices data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop and sales are REVENUE from customers — never add or confuse the two.
+Below is the real sales/labour/cash/report/invoices/cogs data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, or working out a margin from a COGS cost and a sell price — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, and sales are REVENUE from customers — never add or confuse these.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
   return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
@@ -1429,6 +1464,7 @@ async function buildNaturalSearch(db, queryText) {
   if (parse.domains.includes("cash")) result.cash = buildCashSearchPart(db, parse);
   if (parse.domains.includes("report")) result.report = buildReportSearchPart(db, parse);
   if (parse.domains.includes("invoices")) result.invoices = buildInvoiceSearchPart(db, parse);
+  if (parse.domains.includes("cogs")) result.cogs = buildCogsSearchPart(parse);
   await Promise.all(jobs);
 
   const dataParts = [];
@@ -1437,6 +1473,7 @@ async function buildNaturalSearch(db, queryText) {
   if (result.cash) dataParts.push(formatCashPart(result.cash));
   if (result.report) dataParts.push(formatReportPart(result.report));
   if (result.invoices) dataParts.push(formatInvoicePart(result.invoices));
+  if (result.cogs) dataParts.push(formatCogsPart(result.cogs));
 
   try {
     result.answer = await synthesizeAnswer(queryText, dataParts.join("\n\n"));
@@ -1463,7 +1500,8 @@ function formatNaturalSearchEmail(result) {
   if (result.labour) lines.push(formatLabourPart(result.labour), ``);
   if (result.cash) lines.push(formatCashPart(result.cash), ``);
   if (result.report) lines.push(formatReportPart(result.report), ``);
-  if (result.invoices) lines.push(formatInvoicePart(result.invoices));
+  if (result.invoices) lines.push(formatInvoicePart(result.invoices), ``);
+  if (result.cogs) lines.push(formatCogsPart(result.cogs));
 
   return {
     subject: `Search — ${result.restatedQuestion}`.slice(0, 200),
