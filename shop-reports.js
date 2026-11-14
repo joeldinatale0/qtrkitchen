@@ -39,6 +39,19 @@ const SHOP_INTEGRATIONS = {
   },
 };
 
+// The 4 shops that order supplies from the central kitchen (food-ordering
+// `users` table, role='shop') — a strict superset of SHOP_INTEGRATIONS above.
+// Invoices and EOD cash apply to all 4; sales/labour/report only work for
+// whichever of these also have a SHOP_INTEGRATIONS entry (Square/Tanda
+// connected) — Moonee Ponds and Melbourne Central currently don't.
+const ALL_SHOP_SLUGS = ["essendon", "highpoint", "mooneeponds", "melbournecentral"];
+const ALL_SHOP_NAMES = {
+  essendon: "QTR Essendon",
+  highpoint: "QTR Highpoint",
+  mooneeponds: "QTR Moonee Ponds",
+  melbournecentral: "QTR Melbourne Central",
+};
+
 function squareHeaders(squareTokenEnvVar) {
   return {
     "Square-Version": SQUARE_VERSION,
@@ -710,30 +723,31 @@ function todayMelbourneStr() {
 }
 
 // Step 1: turn the free-text question into which data source(s) it needs
-// (sales/labour/cash/report), shops, an absolute date range, and — for the
-// cash/report domains, which have no messy name-matching problem — which
-// single number (if any) the question cares about and how to rank it.
+// (sales/labour/cash/report/invoices), shops, an absolute date range, and —
+// for the cash/report domains, which have no messy name-matching problem —
+// which single number (if any) the question cares about and how to rank it.
 async function parseNaturalQuery(queryText) {
   const todayStr = todayMelbourneStr();
-  const shopList = Object.entries(SHOP_INTEGRATIONS)
-    .map(([slug, c]) => `${slug} = ${c.displayName}`)
-    .join(", ");
+  const shopList = ALL_SHOP_SLUGS.map(
+    (slug) => `${slug} = ${ALL_SHOP_NAMES[slug]}${SHOP_INTEGRATIONS[slug] ? "" : " (no Square/Tanda connected — sales/labour/report not available for this shop, only cash/invoices)"}`
+  ).join(", ");
 
   const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
-{"domains": ["sales" and/or "labour" and/or "cash" and/or "report"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
+{"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
 Rules for "domains" (include every one the question genuinely touches, usually just one):
-- "sales": what sold, revenue, items, drinks, food.
+- "sales": what sold, revenue, items, drinks, food (Square — money coming IN from customers).
 - "labour": hours worked, staff, employees, shifts, wages, rostering, labour cost.
 - "cash": EOD cash sheet / till reconciliation data — till counts, cash vs EFTPOS vs Uber sales recorded at close of day, discrepancies, float.
 - "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) — use this for labour % or $ labour cost on ANY day that is not today, even a single day, since live labour cost only exists for today; also use it for a multi-day trend of these numbers. NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
+- "invoices": what a shop was INVOICED/CHARGED by the central kitchen for its weekly food/paper-goods orders — item quantities, prices, weekly totals, whether that week's invoice has been sent. This is a COST going OUT to the shop, the opposite of "sales" — never confuse the two. Use this for "pull up an invoice", "how much was X invoiced", "what did X order last week and what did it cost".
 Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
 
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
   const parsed = extractJson(text, "parseNaturalQuery");
 
-  const allSlugs = Object.keys(SHOP_INTEGRATIONS);
+  const allSlugs = ALL_SHOP_SLUGS;
   let shops =
     parsed.shops === "all" || !Array.isArray(parsed.shops)
       ? allSlugs
@@ -748,7 +762,7 @@ Resolve relative dates ("past 30 days", "last quarter", "this month", "today") i
     throw new Error("Could not resolve a valid date range from the question");
   }
 
-  const validDomains = ["sales", "labour", "cash", "report"];
+  const validDomains = ["sales", "labour", "cash", "report", "invoices"];
   let domains = Array.isArray(parsed.domains) ? parsed.domains.filter((d) => validDomains.includes(d)) : [];
   if (domains.length === 0) domains = ["sales"];
 
@@ -1285,6 +1299,104 @@ function formatReportPart(report) {
   return lines.join("\n");
 }
 
+// ---- Invoices side of natural-language search ----
+// What a shop was CHARGED by the central kitchen for its weekly food/paper
+// goods orders (see buildWeeklyInvoiceData in server.js, which this mirrors)
+// — the opposite direction of money from "sales". Reads straight from this
+// app's own orders/order_items/items tables, grouped into Monday-Sunday
+// invoice weeks, with invoice_log consulted only to say whether that week's
+// invoice has actually been sent yet.
+
+function mondayOnOrBefore(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay(); // 0 = Sunday
+  dt.setUTCDate(dt.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  return dt.toISOString().slice(0, 10);
+}
+
+function addDaysISO(dateStr, days) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function buildInvoiceSearchPart(db, parse) {
+  const shopRows = db
+    .prepare("SELECT id, slug, name FROM users WHERE role = 'shop'")
+    .all()
+    .filter((s) => parse.shops.includes(s.slug));
+
+  const weeks = [];
+  const lastWeekStart = mondayOnOrBefore(parse.end);
+  for (let weekStart = mondayOnOrBefore(parse.start); weekStart <= lastWeekStart; weekStart = addDaysISO(weekStart, 7)) {
+    const weekEnd = addDaysISO(weekStart, 6);
+    for (const shop of shopRows) {
+      const itemRows = db
+        .prepare(
+          `SELECT oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
+           FROM order_items oi
+           JOIN orders o ON o.id = oi.order_id
+           LEFT JOIN items i ON i.id = oi.item_id
+           WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
+           GROUP BY oi.name, oi.unit
+           ORDER BY oi.name`
+        )
+        .all(shop.id, weekStart, weekEnd);
+      if (itemRows.length === 0) continue;
+
+      const items = itemRows.map((r) => ({ name: r.name, unit: r.unit, quantity: r.quantity, price: r.price }));
+      const total = items.reduce((s, it) => s + (it.price !== null ? it.price * it.quantity : 0), 0);
+      const hasUnpriced = items.some((it) => it.price === null);
+      const sentRow = db
+        .prepare("SELECT sent_at FROM invoice_log WHERE week_start_date = ? AND shop_id = ?")
+        .get(weekStart, shop.id);
+
+      weeks.push({
+        shopName: shop.name,
+        weekStart,
+        weekEnd,
+        items,
+        total,
+        hasUnpriced,
+        sent: Boolean(sentRow),
+        sentAt: sentRow ? sentRow.sent_at : null,
+      });
+    }
+  }
+
+  return { weeks, rank: parse.rank, rankOrder: parse.rankOrder };
+}
+
+function formatInvoicePart(invoices) {
+  const lines = [`INVOICES (weekly food/paper-goods orders charged to each shop by the central kitchen)`, ``];
+  if (invoices.weeks.length === 0) {
+    lines.push(`No invoiced orders found for this period.`);
+    return lines.join("\n");
+  }
+
+  let weeks = invoices.weeks;
+  if (invoices.rank) {
+    weeks = [...weeks].sort((a, b) => (invoices.rankOrder === "asc" ? a.total - b.total : b.total - a.total));
+  }
+
+  weeks.forEach((w, i) => {
+    const rank = invoices.rank ? `${i + 1}. ` : ``;
+    lines.push(`${rank}${w.shopName} — week of ${w.weekStart} to ${w.weekEnd} (${w.sent ? "sent" : "not yet sent"})`);
+    for (const it of w.items) {
+      const unitPrice = it.price !== null ? money(it.price) : "—";
+      const lineTotal = it.price !== null ? money(it.price * it.quantity) : "—";
+      lines.push(`    ${it.quantity} ${it.unit} ${it.name} @ ${unitPrice} = ${lineTotal}`);
+    }
+    lines.push(`    Total: ${money(w.total)}${w.hasUnpriced ? " (some items have no price set yet, excluded from total)" : ""}`, ``);
+  });
+
+  const grandTotal = weeks.reduce((s, w) => s + w.total, 0);
+  lines.push(`Grand total across these invoices: ${money(grandTotal)}`);
+  return lines.join("\n");
+}
+
 // Final step: hand the original question + the real retrieved numbers to
 // Claude and have it actually answer — including any arithmetic or
 // hypothetical ("what if sales were $2k higher") the question needs. This
@@ -1293,7 +1405,7 @@ function formatReportPart(report) {
 // reason over it, never invent a figure.
 async function synthesizeAnswer(queryText, dataText) {
   const system = `A cafe owner asked: "${queryText}"
-Below is the real sales/labour/cash/report data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0.
+Below is the real sales/labour/cash/report/invoices data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher" — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop and sales are REVENUE from customers — never add or confuse the two.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
   return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
@@ -1316,6 +1428,7 @@ async function buildNaturalSearch(db, queryText) {
   if (parse.domains.includes("labour")) jobs.push(buildLabourSearchPart(queryText, parse).then((r) => (result.labour = r)));
   if (parse.domains.includes("cash")) result.cash = buildCashSearchPart(db, parse);
   if (parse.domains.includes("report")) result.report = buildReportSearchPart(db, parse);
+  if (parse.domains.includes("invoices")) result.invoices = buildInvoiceSearchPart(db, parse);
   await Promise.all(jobs);
 
   const dataParts = [];
@@ -1323,6 +1436,7 @@ async function buildNaturalSearch(db, queryText) {
   if (result.labour) dataParts.push(formatLabourPart(result.labour));
   if (result.cash) dataParts.push(formatCashPart(result.cash));
   if (result.report) dataParts.push(formatReportPart(result.report));
+  if (result.invoices) dataParts.push(formatInvoicePart(result.invoices));
 
   try {
     result.answer = await synthesizeAnswer(queryText, dataParts.join("\n\n"));
@@ -1348,7 +1462,8 @@ function formatNaturalSearchEmail(result) {
   if (result.sales) lines.push(formatSalesPart(result.sales), ``);
   if (result.labour) lines.push(formatLabourPart(result.labour), ``);
   if (result.cash) lines.push(formatCashPart(result.cash), ``);
-  if (result.report) lines.push(formatReportPart(result.report));
+  if (result.report) lines.push(formatReportPart(result.report), ``);
+  if (result.invoices) lines.push(formatInvoicePart(result.invoices));
 
   return {
     subject: `Search — ${result.restatedQuestion}`.slice(0, 200),
