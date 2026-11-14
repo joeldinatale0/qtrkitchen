@@ -1459,19 +1459,6 @@ app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req,
 
 // ---------- Kitchen: daily shop reports (Square + Tanda) ----------
 
-// TEMP debug route — fetch a report as JSON without emailing it. Remove after use.
-app.get("/kitchen/admin/debug-report/:slug", requireAuth, requireRole("kitchen"), async (req, res) => {
-  const config = SHOP_INTEGRATIONS[req.params.slug];
-  if (!config) return res.status(404).send("Unknown shop slug");
-  try {
-    const report = await buildDailyShopReport(db, req.params.slug, config.displayName, addDays, req.query.date || undefined);
-    if (!report) return res.status(400).send("SQUARE_ACCESS_TOKEN or TANDA_ACCESS_TOKEN is missing");
-    res.json(report);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
   const shops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({
     slug,
