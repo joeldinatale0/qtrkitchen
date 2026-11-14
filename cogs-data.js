@@ -18,6 +18,9 @@ const COGS_BY_SHOP = {
     "Baby Chino": 17,
     "Bacon & Egg Muffin": 380,
     "Banana Bread": 200,
+    "Banana Chai": 162,
+    "Banana Matcha": 150,
+    "Banana Mont Blanc": 208,
     "Big juice": 75,
     "Bottle Water": 42,
     "Brownie": 306,
@@ -144,6 +147,9 @@ const COGS_BY_SHOP = {
     "Baby Chino": 17,
     "Bacon & Egg Muffin": 380,
     "Banana Bread": 200,
+    "Banana Chai": 162,
+    "Banana Matcha": 150,
+    "Banana Mont Blanc": 208,
     "Birria Toastie": 700,
     "Bottle Water": 42,
     "Brekkie Burger": 380,
@@ -291,6 +297,11 @@ const COGS_BY_SHOP = {
     "halloumi pie": 330,
     "scroll": 280,
     "sweet chilli chicken wrap": 480,
+  },
+  quartertwo: {
+    "Banana Chai": 162,
+    "Banana Matcha": 150,
+    "Banana Mont Blanc": 208,
   },
 };
 
