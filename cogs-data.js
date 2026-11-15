@@ -302,6 +302,11 @@ const COGS_BY_SHOP = {
     "Banana Chai": 162,
     "Banana Matcha": 150,
     "Banana Mont Blanc": 208,
+    "Mont Blanc": 298,
+    "Mont Blanc (Small can)": 219,
+    "Tiramisu Mont Blanc": 298,
+    "Tiramisu Mont Blanc (Small can)": 219,
+    "Wild Blanc": 298,
   },
 };
 
