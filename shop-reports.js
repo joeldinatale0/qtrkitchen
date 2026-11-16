@@ -281,33 +281,6 @@ function topProductEntries(productStats, n) {
     .map(([name, stats]) => [name, stats.revenue, stats.qty]);
 }
 
-// TEMP (audit helper, remove after use): lists every distinct line-item name
-// sold at a shop over the last `days` days, split into priced (has a
-// COGS_BY_SHOP entry) vs unpriced, sorted by revenue.
-async function buildUnpricedItemsReport(shopSlug, days) {
-  const config = SHOP_INTEGRATIONS[shopSlug];
-  if (!config) throw new Error(`Unknown shop slug: ${shopSlug}`);
-  const cogsMap = COGS_BY_SHOP[shopSlug] || {};
-
-  const now = new Date();
-  const endUtc = now;
-  const startUtc = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-
-  const orders = await fetchSquareOrders(config.squareTokenEnvVar, config.squareLocationId, startUtc, endUtc);
-  const { productStats } = summarizeSquareOrders(orders, cogsMap);
-
-  const priced = [];
-  const unpriced = [];
-  for (const [name, stats] of Object.entries(productStats)) {
-    const entry = { name, revenue: Math.round(stats.revenue * 100) / 100, qty: stats.qty };
-    if (cogsMap[name] !== undefined) priced.push(entry);
-    else unpriced.push(entry);
-  }
-  priced.sort((a, b) => b.revenue - a.revenue);
-  unpriced.sort((a, b) => b.revenue - a.revenue);
-  return { priced, unpriced, days, ordersCount: orders.length };
-}
-
 async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDateStr) {
   const config = SHOP_INTEGRATIONS[shopSlug];
   if (!config) return null;
@@ -1612,7 +1585,6 @@ function formatDailyReportEmail(report) {
 
 module.exports = {
   SHOP_INTEGRATIONS,
-  buildUnpricedItemsReport,
   buildDailyShopReport,
   formatDailyReportEmail,
   buildCookieSalesReport,

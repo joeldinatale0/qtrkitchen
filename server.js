@@ -12,7 +12,6 @@ const { buildWeeklySummaryPdf } = require("./invoice-pdf");
 const { COGS_BY_SHOP } = require("./cogs-data");
 const {
   SHOP_INTEGRATIONS,
-  buildUnpricedItemsReport,
   buildDailyShopReport,
   formatDailyReportEmail,
   buildCookieSalesReport,
@@ -1246,20 +1245,6 @@ app.get("/kitchen/shop/:slug/cogs", requireAuth, requireRole("kitchen"), (req, r
     .sort((a, b) => a.name.localeCompare(b.name));
 
   res.render("kitchen-shop-cogs", { shop, items });
-});
-
-// TEMP debug route (remove after use): lists priced/unpriced Square items
-// for a shop over the last N days, for auditing cogs-data.js coverage.
-app.get("/kitchen/admin/debug-unpriced/:slug", requireAuth, requireRole("kitchen"), async (req, res) => {
-  const config = SHOP_INTEGRATIONS[req.params.slug];
-  if (!config) return res.status(404).send("Unknown shop slug");
-  try {
-    const days = Number(req.query.days) || 90;
-    const report = await buildUnpricedItemsReport(req.params.slug, days);
-    res.json(report);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
 });
 
 // Placeholder — not built yet, needs real quantities/formulas from Joel the
