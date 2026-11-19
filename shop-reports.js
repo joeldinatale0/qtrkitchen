@@ -809,30 +809,6 @@ async function parseNaturalQuery(queryText) {
   };
 }
 
-// TEMP (remove after use): run the REAL production parseNaturalQuery system
-// prompt through the Anthropic API directly (no retry, no extractJson), to
-// see the raw stop_reason/usage/content when diagnosing a truncation bug.
-async function debugRawParseCall(queryText) {
-  const system = buildParseSystemPrompt();
-  const res = await fetch(CLAUDE_API_BASE, {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-5-5",
-      max_tokens: 1000,
-      system,
-      messages: [{ role: "user", content: queryText }],
-      thinking: { type: "disabled" },
-    }),
-  });
-  const data = await res.json();
-  return { httpStatus: res.status, stop_reason: data.stop_reason, usage: data.usage, content: data.content, model: data.model, systemPromptLength: system.length };
-}
-
 // Pull every distinct name+variation sold by each shop in the window, with
 // qty/revenue totals — the real, as-sold catalog, not a guessed item list.
 async function fetchDistinctItemsForShops(shopSlugs, startDateStr, endDateStr) {
@@ -1771,6 +1747,5 @@ module.exports = {
   buildNaturalSearch,
   formatNaturalSearchEmail,
   buildCateringOrders,
-  debugRawParseCall,
   fetchTandaUsers,
 };

@@ -20,7 +20,6 @@ const {
   buildNaturalSearch,
   formatNaturalSearchEmail,
   buildCateringOrders,
-  debugRawParseCall,
   fetchTandaUsers,
 } = require("./shop-reports");
 
@@ -1751,29 +1750,6 @@ app.post("/kitchen/sales-search", requireAuth, requireRole("kitchen"), (req, res
   });
 });
 
-// TEMP (remove after use): run a natural-search query and return the raw
-// JSON result directly, for verifying a new domain without needing email
-// access. Does not use the single-flight lock — call sparingly.
-app.get("/kitchen/admin/debug-catering-search", requireAuth, requireRole("kitchen"), async (req, res) => {
-  try {
-    const result = await buildNaturalSearch(db, req.query.q || "");
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// TEMP (remove after use): call the Anthropic API directly with a fixed
-// tiny system prompt and dump the raw envelope (stop_reason, usage,
-// content) to diagnose why parseNaturalQuery keeps getting truncated JSON.
-app.get("/kitchen/admin/debug-raw-claude", requireAuth, requireRole("kitchen"), async (req, res) => {
-  try {
-    const result = await debugRawParseCall(req.query.q || "For Friday 28th what do I need to prepare for catering?");
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // Catering orders — its own admin section (not nested under any shop,
 // even though the catering checkout happens to post into the Essendon
