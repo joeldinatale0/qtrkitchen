@@ -683,11 +683,18 @@ const CLAUDE_API_BASE = "https://api.anthropic.com/v1/messages";
 // practice, no clear pattern) — retry a couple of times on an empty result
 // before giving up, since this is otherwise indistinguishable from a real
 // failure and would surface as a confusing "did not return JSON" error.
-async function callClaude({ system, userText, model, maxTokens }) {
+async function callClaude({ system, userText, model, maxTokens, thinking }) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is missing");
 
   let lastText = "";
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const body = {
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: userText }],
+    };
+    if (thinking) body.thinking = thinking;
     const res = await fetch(CLAUDE_API_BASE, {
       method: "POST",
       headers: {
@@ -695,12 +702,7 @@ async function callClaude({ system, userText, model, maxTokens }) {
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: "user", content: userText }],
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Claude API failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
@@ -760,7 +762,20 @@ Resolve relative dates ("past 30 days", "last quarter", "this month", "today") i
 
 async function parseNaturalQuery(queryText) {
   const system = buildParseSystemPrompt();
-  const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
+  // Haiku 5.5 runs adaptive thinking ON by default even with no `thinking`
+  // param sent at all, and thinking tokens count against max_tokens — this
+  // is what caused real intermittent truncation here (confirmed via a raw
+  // API call: stop_reason "max_tokens", 1000/1000 output tokens all spent
+  // on an empty-text "thinking" block, zero left for the actual JSON).
+  // This is a trivial classification task with nothing to gain from
+  // reasoning, so disable it explicitly instead of just padding max_tokens.
+  const text = await callClaude({
+    system,
+    userText: queryText,
+    model: "claude-haiku-5-5",
+    maxTokens: 1000,
+    thinking: { type: "disabled" },
+  });
   const parsed = extractJson(text, "parseNaturalQuery");
 
   const allSlugs = ALL_SHOP_SLUGS;
@@ -811,6 +826,7 @@ async function debugRawParseCall(queryText) {
       max_tokens: 1000,
       system,
       messages: [{ role: "user", content: queryText }],
+      thinking: { type: "disabled" },
     }),
   });
   const data = await res.json();
@@ -1112,11 +1128,14 @@ Return ONLY this JSON shape:
 }
 Respond with ONLY the raw JSON object — no markdown code fences, no explanation before or after it.`;
 
+  // Same Haiku 5.5 default-adaptive-thinking risk as parseNaturalQuery
+  // above — disable it here too, same reasoning (pure classification).
   const text = await callClaude({
     system,
     userText: rosterLines || "(no one worked in this period)",
     model: "claude-haiku-5-5",
     maxTokens: 800,
+    thinking: { type: "disabled" },
   });
   const parsed = extractJson(text, "classifyLabourQuery");
   return {
@@ -1590,7 +1609,16 @@ async function synthesizeAnswer(queryText, dataText) {
 Below is the real sales/labour/cash/report/invoices/cogs/catering data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, working out a margin from a COGS cost and a sell price, or totalling a prep list across several catering orders (e.g. adding up every "x N" line of a given ingredient/item across multiple orders on the same day) — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. If the question asks what needs to be prepped/made for catering, give a clear per-order breakdown (which items, how many, for which named order) AND a combined total per item if several orders share the same day — the data below already includes a pre-computed "TOTAL ACROSS ALL ORDERS" section for this, but double-check it against the per-order lines before trusting it. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, catering orders are upcoming prep/fulfilment jobs (not past sales), and sales are REVENUE from customers — never add or confuse these.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
-  return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
+  // Sonnet 5.5 also runs adaptive thinking on by default, and this call
+  // genuinely benefits from it (the prompt asks it to check its own
+  // arithmetic) — so thinking stays on here, just with a much bigger
+  // max_tokens ceiling so thinking + the visible answer both fit.
+  return callClaude({
+    system,
+    userText: dataText || "(no data found for this period)",
+    model: "claude-sonnet-5-5",
+    maxTokens: 4000,
+  });
 }
 
 // Single entry point for the free-text search box — resolves which data
