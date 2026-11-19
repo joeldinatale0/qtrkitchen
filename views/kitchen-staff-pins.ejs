@@ -1,0 +1,74 @@
+<%- include('partials/head', { title: "Staff PINs — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
+  <h1>Staff PINs</h1>
+  <p class="subtitle">
+    Every staff member's 4-digit PIN for logging in on the shop side (/staff-login). Pulled from Tanda — new hires show up here once Tanda has them.
+  </p>
+
+  <% if (tandaError) { %>
+    <p class="error">Could not load staff from Tanda: <%= tandaError %></p>
+  <% } %>
+  <% if (saved) { %>
+    <div class="success-banner">Saved.</div>
+  <% } %>
+
+  <% if (newCount > 0) { %>
+    <form method="POST" action="/kitchen/admin/staff-pins/sync" class="card" style="margin-bottom: 20px;">
+      <p><strong><%= newCount %></strong> staff from Tanda don't have a PIN yet.</p>
+      <button class="btn btn-filled" type="submit">Generate PINs for new staff</button>
+    </form>
+  <% } %>
+
+  <div class="card">
+    <% if (staff.length === 0) { %>
+      <p class="muted">No staff found.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>PIN</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% staff.forEach(function(s) { %>
+            <tr>
+              <td><%= s.name %></td>
+              <td>
+                <% if (s.pinRow) { %>
+                  <strong style="font-variant-numeric: tabular-nums; letter-spacing: 2px;"><%= s.pinRow.pin %></strong>
+                <% } else { %>
+                  <span class="muted">not generated yet</span>
+                <% } %>
+              </td>
+              <td>
+                <% if (!s.pinRow) { %>
+                  <span class="muted">—</span>
+                <% } else if (s.pinRow.active) { %>
+                  Active
+                <% } else { %>
+                  <span class="muted">Deactivated</span>
+                <% } %>
+              </td>
+              <td style="white-space: nowrap;">
+                <% if (s.pinRow) { %>
+                  <form method="POST" action="/kitchen/admin/staff-pins/<%= s.pinRow.id %>/regenerate" style="display:inline;">
+                    <button class="btn btn-small" type="submit" onclick="return confirm('Regenerate PIN for <%= s.name %>? Their old PIN will stop working immediately.')">Regenerate</button>
+                  </form>
+                  <form method="POST" action="/kitchen/admin/staff-pins/<%= s.pinRow.id %>/toggle" style="display:inline;">
+                    <button class="btn btn-small" type="submit">
+                      <%= s.pinRow.active ? "Deactivate" : "Reactivate" %>
+                    </button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

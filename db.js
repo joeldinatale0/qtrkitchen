@@ -250,6 +250,23 @@ db.exec(`
     total_cents INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- One PIN per staff member (pulled from Tanda, Joel's rostering system),
+  -- used as the real front door for shop-side login: a staff member enters
+  -- this PIN before picking which store they're working at, so every order
+  -- or cash sheet they submit is attributed to them, not just the shared
+  -- shop account. PIN is stored in plain text deliberately — Joel needs to
+  -- be able to look it up and hand it to the staff member; it is a short
+  -- internal attribution code, not a secret protecting money or data on
+  -- its own (ordering/cash actions still require picking a real store).
+  CREATE TABLE IF NOT EXISTS staff_pins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tanda_user_id INTEGER UNIQUE,
+    name TEXT NOT NULL,
+    pin TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from
@@ -296,6 +313,10 @@ ensureColumn("items", "shop_id", "INTEGER REFERENCES users(id)"); // NULL = visi
 // wraps together, etc) — independent of the shop-facing ordering menu
 // categories, which are organized for browsing, not prep.
 ensureColumn("items", "kitchen_section", "TEXT NOT NULL DEFAULT 'extras'");
+// Which individual staff member (by name, resolved from their PIN) placed
+// or most recently edited this order — shop_id alone only identifies the
+// store, not the person, so this is what makes an order attributable.
+ensureColumn("orders", "placed_by", "TEXT");
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;

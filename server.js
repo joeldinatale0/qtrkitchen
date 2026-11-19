@@ -21,6 +21,7 @@ const {
   formatNaturalSearchEmail,
   buildCateringOrders,
   debugRawParseCall,
+  fetchTandaUsers,
 } = require("./shop-reports");
 
 const app = express();
@@ -1246,6 +1247,71 @@ app.get("/kitchen/shop/:slug/cogs", requireAuth, requireRole("kitchen"), (req, r
     .sort((a, b) => a.name.localeCompare(b.name));
 
   res.render("kitchen-shop-cogs", { shop, items });
+});
+
+// Staff PINs — the real front door for shop-side login (see /staff-login).
+// Pulled from Tanda (the single source of truth for who's actually staff)
+// rather than typed in by hand, so leavers/new hires stay in sync with
+// whatever Joel already maintains there.
+function generateUniquePin() {
+  const existing = new Set(db.prepare("SELECT pin FROM staff_pins").all().map((r) => r.pin));
+  let pin;
+  do {
+    pin = String(Math.floor(1000 + Math.random() * 9000));
+  } while (existing.has(pin));
+  return pin;
+}
+
+app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async (req, res) => {
+  let tandaUsers = [];
+  let tandaError = null;
+  if (!process.env.TANDA_ACCESS_TOKEN) {
+    tandaError = "TANDA_ACCESS_TOKEN is missing";
+  } else {
+    try {
+      tandaUsers = await fetchTandaUsers();
+    } catch (err) {
+      tandaError = err.message;
+    }
+  }
+
+  const existingPins = db.prepare("SELECT * FROM staff_pins ORDER BY name").all();
+  const byTandaId = new Map(existingPins.map((p) => [p.tanda_user_id, p]));
+
+  const staff = tandaUsers
+    .map((u) => ({
+      tandaUserId: u.id,
+      name: (u.name || "").trim() || `Employee #${u.id}`,
+      pinRow: byTandaId.get(u.id) || null,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const newCount = staff.filter((s) => !s.pinRow).length;
+
+  res.render("kitchen-staff-pins", { staff, tandaError, newCount, saved: req.query.saved === "1" });
+});
+
+app.post("/kitchen/admin/staff-pins/sync", requireAuth, requireRole("kitchen"), async (req, res) => {
+  if (!process.env.TANDA_ACCESS_TOKEN) return res.redirect("/kitchen/admin/staff-pins");
+  const tandaUsers = await fetchTandaUsers();
+  const insert = db.prepare("INSERT INTO staff_pins (tanda_user_id, name, pin) VALUES (?, ?, ?)");
+  for (const u of tandaUsers) {
+    const exists = db.prepare("SELECT 1 FROM staff_pins WHERE tanda_user_id = ?").get(u.id);
+    if (exists) continue;
+    const name = (u.name || "").trim() || `Employee #${u.id}`;
+    insert.run(u.id, name, generateUniquePin());
+  }
+  res.redirect("/kitchen/admin/staff-pins?saved=1");
+});
+
+app.post("/kitchen/admin/staff-pins/:id/regenerate", requireAuth, requireRole("kitchen"), (req, res) => {
+  db.prepare("UPDATE staff_pins SET pin = ? WHERE id = ?").run(generateUniquePin(), req.params.id);
+  res.redirect("/kitchen/admin/staff-pins?saved=1");
+});
+
+app.post("/kitchen/admin/staff-pins/:id/toggle", requireAuth, requireRole("kitchen"), (req, res) => {
+  db.prepare("UPDATE staff_pins SET active = 1 - active WHERE id = ?").run(req.params.id);
+  res.redirect("/kitchen/admin/staff-pins?saved=1");
 });
 
 // Placeholder — not built yet, needs real quantities/formulas from Joel the

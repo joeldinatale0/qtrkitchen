@@ -1772,4 +1772,5 @@ module.exports = {
   formatNaturalSearchEmail,
   buildCateringOrders,
   debugRawParseCall,
+  fetchTandaUsers,
 };
