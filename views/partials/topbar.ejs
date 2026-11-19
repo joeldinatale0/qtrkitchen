@@ -2,7 +2,9 @@
   <div class="brand">QTR Kitchen Ordering</div>
   <nav>
     <% if (currentUser) { %>
-      <span class="muted"><%= currentUser.name %></span>
+      <span class="muted">
+        <%= currentUser.name %><% if (typeof currentStaffMember !== 'undefined' && currentStaffMember) { %> (<%= currentStaffMember.name %>)<% } %>
+      </span>
       <% if (currentUser.role === 'shop') { %>
         <a href="/choose-ordering">Menu</a>
         <a href="/order/select-date">Food Order</a>

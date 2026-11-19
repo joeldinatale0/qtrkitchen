@@ -1,0 +1,24 @@
+<%- include('partials/head', { title: 'Choose Store — QTR Kitchen Ordering' }) %>
+
+<div class="container" style="padding-top: 96px;">
+  <div style="text-align: center; margin-bottom: 56px;">
+    <h1 style="margin-bottom: 4px;">Hi <%= staffMember.name %></h1>
+    <p class="subtitle" style="margin-bottom: 0;">Which store are you working at?</p>
+  </div>
+
+  <div class="store-grid">
+    <% shops.forEach(function(shop) { %>
+      <form method="POST" action="/staff-login/choose-store">
+        <input type="hidden" name="slug" value="<%= shop.slug %>" />
+        <button class="store-tile" type="submit" style="width: 100%; background: none; font: inherit; cursor: pointer;"><%= shop.name %></button>
+      </form>
+    <% }) %>
+  </div>
+
+  <form method="POST" action="/logout" style="text-align: center; margin-top: 56px;">
+    <button class="muted" type="submit" style="background: none; border: none; font: inherit; text-decoration: underline; cursor: pointer;">Not you? Log out</button>
+  </form>
+</div>
+
+</body>
+</html>

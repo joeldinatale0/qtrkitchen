@@ -3,13 +3,11 @@
 <div class="container" style="padding-top: 96px;">
   <div style="text-align: center; margin-bottom: 56px;">
     <h1 style="margin-bottom: 4px;">QTR Kitchen<br />Ordering</h1>
-    <p class="subtitle" style="margin-bottom: 0;">Select your store to log in.</p>
+    <p class="subtitle" style="margin-bottom: 0;">Staff: enter your PIN to get started.</p>
   </div>
 
-  <div class="store-grid">
-    <% shops.forEach(function(shop) { %>
-      <a class="store-tile" href="/login/<%= shop.slug %>"><%= shop.name %></a>
-    <% }) %>
+  <div style="max-width: 320px; margin: 0 auto;">
+    <a class="btn btn-filled" href="/staff-login" style="display: block; width: 100%; text-align: center;">Staff Login</a>
   </div>
 
   <% if (kitchen) { %>

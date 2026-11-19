@@ -96,7 +96,7 @@ function isLateSubmission() {
 // Fire-and-forget: never block the order-submit response on email delivery.
 // Sent via Resend's HTTPS API (not raw SMTP) since cloud hosts commonly block
 // outbound SMTP ports for spam prevention.
-function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit, areaLabel) {
+function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLate, isEdit, areaLabel, placedBy) {
   if (!process.env.GMAIL_APP_PASSWORD) return;
 
   // Grouped by kitchen prep station, in KITCHEN_SECTION_ORDER, so the
@@ -132,7 +132,8 @@ function sendOrderEmail(shop, deliveryDateLabel, orderedItems, customNotes, isLa
     ? `This order was submitted after the ${ORDER_CUTOFF_HOUR}:00 cutoff.\n\n`
     : "";
   const label = areaLabel ? `${areaLabel} order` : "New order";
-  const text = `${editNotice}${lateNotice}${label} from ${shop.name} for delivery ${deliveryDateLabel}\n\n${lines.join("\n")}\n`;
+  const placedByLine = placedBy ? `Placed by: ${placedBy}\n\n` : "";
+  const text = `${editNotice}${lateNotice}${label} from ${shop.name} for delivery ${deliveryDateLabel}\n\n${placedByLine}${lines.join("\n")}\n`;
   const subjectPrefix = isEdit
     ? "THIS IS AN EDITED ORDER! Disregard the last order — "
     : isLate
@@ -471,10 +472,11 @@ async function sendCookieBakeListIfDue() {
 
 // One shop's EOD cash report — sent the moment that shop submits (or
 // resubmits) its cash sheet for a date, not on a delayed daily schedule.
-function buildEodCashReportEmail(shopName, reportDate, sheet, isUpdate) {
+function buildEodCashReportEmail(shopName, reportDate, sheet, isUpdate, submittedBy) {
   const money = (cents) => `$${(cents / 100).toFixed(2)}`;
   const lines = [
     `EOD Cash Report — ${shopName} — ${reportDate}`,
+    `Submitted by: ${submittedBy || "unknown"}`,
     ``,
     `  Till Amount:  ${money(sheet.till_amount_cents)}`,
     `  EFTPOS:       ${money(sheet.eftpos_sales_cents)}`,
@@ -531,6 +533,18 @@ const loginLimiter = rateLimit({
   keyGenerator: (req) => (req.body.username || "unknown").trim().toLowerCase(),
 });
 
+// Only 10,000 possible 4-digit PINs, so this is the actual brute-force
+// defence for the real front door — keyed per browser session rather than
+// per-PIN (there's no "username" to key on here before the PIN is checked).
+const staffPinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many attempts. Please wait 15 minutes and try again.",
+  keyGenerator: (req) => req.sessionID,
+});
+
 // Pure calendar-date arithmetic, anchored in UTC on both ends so the result
 // never shifts by a day depending on what timezone the server's system
 // clock happens to be set to (this bit us: .toISOString() after local-time
@@ -583,6 +597,15 @@ function requireRole(role) {
     if (!req.session.user || req.session.user.role !== role) {
       return res.status(403).send("Forbidden");
     }
+    // The shop account identifies which STORE this is, not who's actually
+    // using it — every shop route also requires a staff member to have
+    // identified themselves via their own PIN first (see /staff-login), so
+    // every action they take is attributable to a real person, not just
+    // "QTR Essendon". A session missing this (new login, or one that
+    // predates this feature) gets sent to re-identify before continuing.
+    if (role === "shop" && !req.session.staffMember) {
+      return res.redirect("/staff-login");
+    }
     next();
   };
 }
@@ -590,6 +613,7 @@ function requireRole(role) {
 
 app.use((req, res, next) => {
   res.locals.currentUser = req.session.user || null;
+  res.locals.currentStaffMember = req.session.staffMember || null;
   res.locals.formatDate = formatDate;
   next();
 });
@@ -650,6 +674,42 @@ app.post("/login", loginLimiter, (req, res) => {
 
 app.post("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/"));
+});
+
+// ---------- Staff login: PIN first, then pick a store ----------
+// The real front door for the shop side of the app. A staff member enters
+// their own PIN (see /kitchen/admin/staff-pins for how those are issued),
+// then picks which store they're working at — only then do they land in
+// the existing shop account session, so every order or cash sheet they
+// submit is attributable to them by name, not just the shared shop login.
+
+app.get("/staff-login", (req, res) => {
+  if (req.session.staffMember) return res.redirect("/staff-login/choose-store");
+  res.render("staff-login", { error: null });
+});
+
+app.post("/staff-login", staffPinLimiter, (req, res) => {
+  const pin = (req.body.pin || "").trim();
+  const staff = db.prepare("SELECT * FROM staff_pins WHERE pin = ? AND active = 1").get(pin);
+  if (!staff) {
+    return res.render("staff-login", { error: "Incorrect PIN. Try again." });
+  }
+  req.session.staffMember = { id: staff.id, name: staff.name };
+  res.redirect("/staff-login/choose-store");
+});
+
+app.get("/staff-login/choose-store", (req, res) => {
+  if (!req.session.staffMember) return res.redirect("/staff-login");
+  const shops = db.prepare("SELECT * FROM users WHERE role = 'shop' ORDER BY name").all();
+  res.render("staff-login-choose-store", { shops, staffMember: req.session.staffMember });
+});
+
+app.post("/staff-login/choose-store", (req, res) => {
+  if (!req.session.staffMember) return res.redirect("/staff-login");
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.body.slug);
+  if (!shop) return res.redirect("/staff-login/choose-store");
+  req.session.user = { id: shop.id, name: shop.name, slug: shop.slug, role: shop.role };
+  res.redirect("/choose-ordering");
 });
 
 // ---------- Shop: pick a delivery date, then place order ----------
@@ -746,7 +806,7 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     floatCents,
     cashAmountCents,
     discrepancyCents,
-    req.session.user.name
+    req.session.staffMember.name
   );
 
   // Fire-and-forget: the submitting shop should not wait on email delivery.
@@ -762,7 +822,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
         cash_amount_cents: cashAmountCents,
         discrepancy_cents: discrepancyCents,
       },
-      isUpdate
+      isUpdate,
+      req.session.staffMember.name
     );
     sendEmail({ to: DAILY_REPORT_EMAIL_TO, subject: email.subject, text: email.text }).catch((err) =>
       console.error("EOD cash report email failed:", err.message)
@@ -866,14 +927,14 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
        ))`
     ).run(order.id);
     db.prepare(
-      "UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ? WHERE id = ?"
-    ).run(isLate ? 1 : 0, order.id);
+      "UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ?, placed_by = ? WHERE id = ?"
+    ).run(isLate ? 1 : 0, req.session.staffMember.name, order.id);
   } else {
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO orders (shop_id, delivery_date, is_late) VALUES (?, ?, ?)"
+        "INSERT INTO orders (shop_id, delivery_date, is_late, placed_by) VALUES (?, ?, ?, ?)"
       )
-      .run(shopId, deliveryDate, isLate ? 1 : 0);
+      .run(shopId, deliveryDate, isLate ? 1 : 0, req.session.staffMember.name);
     order = { id: lastInsertRowid };
   }
 
@@ -905,7 +966,7 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
     insertOrderItem.run(order.id, null, "Custom request", "", 1, null, note);
   }
 
-  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, customNotes, isLate, isEdit);
+  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, customNotes, isLate, isEdit, undefined, req.session.staffMember.name);
 
   res.redirect(`/order/complete?date=${deliveryDate}`);
 });
@@ -1047,14 +1108,15 @@ app.post("/order/paper-goods", requireAuth, requireRole("shop"), (req, res) => {
          SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'paper'
        )`
     ).run(order.id);
-    db.prepare("UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ? WHERE id = ?").run(
+    db.prepare("UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ?, placed_by = ? WHERE id = ?").run(
       isLate ? 1 : 0,
+      req.session.staffMember.name,
       order.id
     );
   } else {
     const { lastInsertRowid } = db
-      .prepare("INSERT INTO orders (shop_id, delivery_date, is_late) VALUES (?, ?, ?)")
-      .run(shopId, deliveryDate, isLate ? 1 : 0);
+      .prepare("INSERT INTO orders (shop_id, delivery_date, is_late, placed_by) VALUES (?, ?, ?, ?)")
+      .run(shopId, deliveryDate, isLate ? 1 : 0, req.session.staffMember.name);
     order = { id: lastInsertRowid };
   }
 
@@ -1077,7 +1139,7 @@ app.post("/order/paper-goods", requireAuth, requireRole("shop"), (req, res) => {
     }
   }
 
-  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, [], isLate, isEdit, "Paper Goods");
+  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, [], isLate, isEdit, "Paper Goods", req.session.staffMember.name);
 
   res.redirect(`/order/paper-goods/complete?date=${deliveryDate}`);
 });
