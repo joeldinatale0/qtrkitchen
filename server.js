@@ -1783,21 +1783,6 @@ app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res
   );
 });
 
-// TEMP (remove after use): delete a manual catering order row by id, for
-// cleaning up a test insert made while debugging the add-order flow.
-app.post("/kitchen/admin/debug-delete-catering/:id", requireAuth, requireRole("kitchen"), (req, res) => {
-  const result = db.prepare("DELETE FROM catering_orders_manual WHERE id = ?").run(req.params.id);
-  res.json({ changes: result.changes });
-});
-
-// TEMP (remove after use): list manual catering orders matching a text
-// search in items_json, so a junk test row can be found by id.
-app.get("/kitchen/admin/debug-find-catering", requireAuth, requireRole("kitchen"), (req, res) => {
-  const rows = db
-    .prepare("SELECT id, event_date, items_json FROM catering_orders_manual WHERE items_json LIKE ?")
-    .all(`%${req.query.q || ""}%`);
-  res.json(rows);
-});
 
 // The original exact-term search — pick shops, item name(s), and a date
 // range yourself. Kept as a fallback for precise term matching.
