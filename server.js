@@ -1783,6 +1783,13 @@ app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res
   );
 });
 
+// TEMP (remove after use): delete a manual catering order row by id, for
+// cleaning up a test insert made while debugging the add-order flow.
+app.post("/kitchen/admin/debug-delete-catering/:id", requireAuth, requireRole("kitchen"), (req, res) => {
+  const result = db.prepare("DELETE FROM catering_orders_manual WHERE id = ?").run(req.params.id);
+  res.json({ changes: result.changes });
+});
+
 // The original exact-term search — pick shops, item name(s), and a date
 // range yourself. Kept as a fallback for precise term matching.
 app.get("/kitchen/sales-search/advanced", requireAuth, requireRole("kitchen"), (req, res) => {
