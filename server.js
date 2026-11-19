@@ -1349,7 +1349,13 @@ app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async 
 
   const newCount = staff.filter((s) => !s.pinRow).length;
 
-  res.render("kitchen-staff-pins", { staff, tandaError, newCount, saved: req.query.saved === "1" });
+  res.render("kitchen-staff-pins", {
+    staff,
+    tandaError,
+    newCount,
+    saved: req.query.saved === "1",
+    error: req.query.error || null,
+  });
 });
 
 app.post("/kitchen/admin/staff-pins/sync", requireAuth, requireRole("kitchen"), async (req, res) => {
@@ -1367,6 +1373,21 @@ app.post("/kitchen/admin/staff-pins/sync", requireAuth, requireRole("kitchen"), 
 
 app.post("/kitchen/admin/staff-pins/:id/regenerate", requireAuth, requireRole("kitchen"), (req, res) => {
   db.prepare("UPDATE staff_pins SET pin = ? WHERE id = ?").run(generateUniquePin(), req.params.id);
+  res.redirect("/kitchen/admin/staff-pins?saved=1");
+});
+
+app.post("/kitchen/admin/staff-pins/:id/set", requireAuth, requireRole("kitchen"), (req, res) => {
+  const pin = (req.body.pin || "").trim();
+  if (!/^\d{4}$/.test(pin)) {
+    return res.redirect("/kitchen/admin/staff-pins?error=" + encodeURIComponent("PIN must be exactly 4 digits."));
+  }
+  const taken = db.prepare("SELECT name FROM staff_pins WHERE pin = ? AND id != ?").get(pin, req.params.id);
+  if (taken) {
+    return res.redirect(
+      "/kitchen/admin/staff-pins?error=" + encodeURIComponent(`${pin} is already ${taken.name}'s PIN.`)
+    );
+  }
+  db.prepare("UPDATE staff_pins SET pin = ? WHERE id = ?").run(pin, req.params.id);
   res.redirect("/kitchen/admin/staff-pins?saved=1");
 });
 

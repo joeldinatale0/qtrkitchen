@@ -11,6 +11,9 @@
   <% if (tandaError) { %>
     <p class="error">Could not load staff from Tanda: <%= tandaError %></p>
   <% } %>
+  <% if (typeof error !== 'undefined' && error) { %>
+    <p class="error"><%= error %></p>
+  <% } %>
   <% if (saved) { %>
     <div class="success-banner">Saved.</div>
   <% } %>
@@ -52,6 +55,10 @@
               </td>
               <td style="white-space: nowrap;">
                 <% if (s.pinRow) { %>
+                  <form method="POST" action="/kitchen/admin/staff-pins/<%= s.pinRow.id %>/set" style="display:inline;">
+                    <input type="text" name="pin" maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="set PIN" style="width: 70px;" />
+                    <button class="btn btn-small" type="submit">Set</button>
+                  </form>
                   <form method="POST" action="/kitchen/admin/staff-pins/<%= s.pinRow.id %>/regenerate" style="display:inline;">
                     <button class="btn btn-small" type="submit" onclick="return confirm('Regenerate PIN for <%= s.name %>? Their old PIN will stop working immediately.')">Regenerate</button>
                   </form>
