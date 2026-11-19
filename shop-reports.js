@@ -679,25 +679,36 @@ function formatSalesSearchEmail(result) {
 // decides which ones are in scope, and how to group/rank them.
 const CLAUDE_API_BASE = "https://api.anthropic.com/v1/messages";
 
+// The API occasionally returns a 200 with an empty content array (seen in
+// practice, no clear pattern) — retry a couple of times on an empty result
+// before giving up, since this is otherwise indistinguishable from a real
+// failure and would surface as a confusing "did not return JSON" error.
 async function callClaude({ system, userText, model, maxTokens }) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is missing");
-  const res = await fetch(CLAUDE_API_BASE, {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: userText }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Claude API failed: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return (data.content || []).map((c) => c.text || "").join("");
+
+  let lastText = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(CLAUDE_API_BASE, {
+      method: "POST",
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: userText }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Claude API failed: ${res.status} ${await res.text()}`);
+    const data = await res.json();
+    lastText = (data.content || []).map((c) => c.text || "").join("");
+    if (lastText.trim()) return lastText;
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+  }
+  return lastText;
 }
 
 function extractJson(text, context) {
