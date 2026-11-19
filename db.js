@@ -317,6 +317,17 @@ ensureColumn("items", "kitchen_section", "TEXT NOT NULL DEFAULT 'extras'");
 // or most recently edited this order — shop_id alone only identifies the
 // store, not the person, so this is what makes an order attributable.
 ensureColumn("orders", "placed_by", "TEXT");
+// Quarter Two trades at night on Friday/Saturday on top of its normal day
+// trade, so those two days need a second EFTPOS/cash figure for the night
+// shift — null for every other shop/day.
+ensureColumn("eod_cash_sheets", "nights_eftpos_cents", "INTEGER");
+ensureColumn("eod_cash_sheets", "nights_cash_cents", "INTEGER");
+
+// The shop account seeded as "QTR Moonee Ponds" now trades as Quarter Two
+// — same account, slug and data, just a new display name.
+db.prepare(
+  "UPDATE users SET name = 'Quarter Two' WHERE slug = 'mooneeponds' AND role = 'shop' AND name != 'Quarter Two'"
+).run();
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
@@ -327,7 +338,7 @@ function seedIfEmpty() {
     const shops = [
       ["essendon", "QTR Essendon", "essendon", "QTRESSENDON"],
       ["highpoint", "QTR Highpoint", "highpoint", "QTRHP"],
-      ["mooneeponds", "QTR Moonee Ponds", "mooneeponds", "QTRMP"],
+      ["mooneeponds", "Quarter Two", "mooneeponds", "QTRMP"],
       ["melbournecentral", "QTR Melbourne Central", "melbournecentral", "QTRMC"],
     ];
     for (const [slug, name, username, pw] of shops) {

@@ -48,7 +48,7 @@ const ALL_SHOP_SLUGS = ["essendon", "highpoint", "mooneeponds", "melbournecentra
 const ALL_SHOP_NAMES = {
   essendon: "QTR Essendon",
   highpoint: "QTR Highpoint",
-  mooneeponds: "QTR Moonee Ponds",
+  mooneeponds: "Quarter Two",
   melbournecentral: "QTR Melbourne Central",
 };
 

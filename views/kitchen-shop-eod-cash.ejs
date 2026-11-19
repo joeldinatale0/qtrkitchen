@@ -28,6 +28,10 @@
             <th>Cash Sales</th>
             <th>Cash Amount</th>
             <th>Discrepancy</th>
+            <% if (shop.slug === 'mooneeponds') { %>
+              <th>Nights EFTPOS</th>
+              <th>Nights Cash</th>
+            <% } %>
             <th></th>
           </tr>
         </thead>
@@ -43,6 +47,10 @@
               <td data-label="Discrepancy" class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
                 $<%= (s.discrepancy_cents / 100).toFixed(2) %>
               </td>
+              <% if (shop.slug === 'mooneeponds') { %>
+                <td data-label="Nights EFTPOS"><%= s.nights_eftpos_cents !== null ? '$' + (s.nights_eftpos_cents / 100).toFixed(2) : '—' %></td>
+                <td data-label="Nights Cash"><%= s.nights_cash_cents !== null ? '$' + (s.nights_cash_cents / 100).toFixed(2) : '—' %></td>
+              <% } %>
               <td data-label="">
                 <form method="POST" action="/kitchen/eod-cash/delete/<%= shop.slug %>" class="inline-form"
                       onsubmit="return confirm('Delete this cash sheet?');">

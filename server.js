@@ -417,10 +417,10 @@ async function sendDailyShopReportsIfDue() {
 const COOKIE_BAKE_HOUR = 16; // 4:00 PM Melbourne time — baking for tomorrow morning
 
 // One combined cookie-baking total (not split by shop) for the central
-// kitchen, sent once daily. Quarter Two isn't included — it bakes its own;
-// this covers the 3 shops that get next-day-delivered baked goods
-// (Essendon, Highpoint, and QTR Moonee Ponds, which isn't its own connected
-// shop yet so it borrows Highpoint's figures — see cookie_bake_targets).
+// kitchen, sent once daily. This covers the 3 shops that get next-day-
+// delivered baked goods (Essendon, Highpoint, and the shop now trading as
+// Quarter Two, which isn't its own connected sales-reporting shop yet so
+// it borrows Highpoint's figures — see cookie_bake_targets).
 // bakeDate: the morning being baked for (tomorrow, for the real scheduled
 // send; any date for a manual test send).
 function buildCookieBakeEmail(bakeDate) {
@@ -441,7 +441,7 @@ function buildCookieBakeEmail(bakeDate) {
     `  ${target.chocchip_qty} x Choc Chip`,
     `  ${target.mnm_qty} x M&M`,
     ``,
-    `Combined total for Essendon, Highpoint and QTR Moonee Ponds — no store breakdown needed.`,
+    `Combined total for Essendon, Highpoint and Quarter Two — no store breakdown needed.`,
   ].join("\n");
 
   return { subject: `Cookie baking list — ${weekdayName} ${bakeDate}`, text };
@@ -484,6 +484,9 @@ function buildEodCashReportEmail(shopName, reportDate, sheet, isUpdate, submitte
     `  Cash Amount:  ${money(sheet.cash_amount_cents)}`,
     `  Discrepancy:  ${money(sheet.discrepancy_cents)}`,
   ];
+  if (sheet.nights_eftpos_cents !== null && sheet.nights_eftpos_cents !== undefined) {
+    lines.push(``, `  Nights EFTPOS: ${money(sheet.nights_eftpos_cents)}`, `  Nights Cash:   ${money(sheet.nights_cash_cents)}`);
+  }
 
   return {
     subject: `${isUpdate ? "UPDATED " : ""}EOD Cash Report — ${shopName} — ${reportDate}`,
@@ -562,6 +565,18 @@ function tomorrow() {
 function isWeekendDate(isoDate) {
   const day = new Date(isoDate + "T00:00:00").getDay(); // 0 = Sunday, 6 = Saturday
   return day === 0 || day === 6;
+}
+
+function isFriOrSat(isoDate) {
+  const day = new Date(isoDate + "T00:00:00").getDay(); // 5 = Friday, 6 = Saturday
+  return day === 5 || day === 6;
+}
+
+// Quarter Two (slug "mooneeponds") trades at night on top of its normal
+// day trade on Friday/Saturday, so its EOD cash sheet needs a second
+// EFTPOS/cash figure for the night shift on those two days only.
+function showsNightsFields(shopSlug, reportDate) {
+  return shopSlug === "mooneeponds" && isFriOrSat(reportDate);
 }
 
 function effectivePar(parRow, isoDate) {
@@ -754,6 +769,7 @@ app.get("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     existing,
     recent,
     saved: req.query.saved === "1",
+    showNights: showsNightsFields(shopSlug, reportDate),
   });
 });
 
@@ -771,6 +787,9 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
   // auto-calculated from till amount minus float — that is planned for
   // later, not yet turned on.
   const cashAmountCents = toCents(req.body.cash_amount);
+  const nightsApply = showsNightsFields(shopSlug, reportDate);
+  const nightsEftposCents = nightsApply ? toCents(req.body.nights_eftpos) : null;
+  const nightsCashCents = nightsApply ? toCents(req.body.nights_cash) : null;
 
   const floatSetting = db.prepare("SELECT float_cents FROM shop_float_settings WHERE shop_slug = ?").get(shopSlug);
   const floatCents = floatSetting ? floatSetting.float_cents : 50000;
@@ -783,8 +802,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
 
   db.prepare(
     `INSERT INTO eod_cash_sheets
-       (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, submitted_by, submitted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, nights_eftpos_cents, nights_cash_cents, submitted_by, submitted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(shop_slug, report_date) DO UPDATE SET
        till_amount_cents = excluded.till_amount_cents,
        eftpos_sales_cents = excluded.eftpos_sales_cents,
@@ -793,6 +812,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
        float_cents = excluded.float_cents,
        cash_amount_cents = excluded.cash_amount_cents,
        discrepancy_cents = excluded.discrepancy_cents,
+       nights_eftpos_cents = excluded.nights_eftpos_cents,
+       nights_cash_cents = excluded.nights_cash_cents,
        submitted_by = excluded.submitted_by,
        submitted_at = CURRENT_TIMESTAMP`
   ).run(
@@ -805,6 +826,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     floatCents,
     cashAmountCents,
     discrepancyCents,
+    nightsEftposCents,
+    nightsCashCents,
     req.session.staffMember.name
   );
 
@@ -820,6 +843,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
         cash_sales_cents: cashSalesCents,
         cash_amount_cents: cashAmountCents,
         discrepancy_cents: discrepancyCents,
+        nights_eftpos_cents: nightsEftposCents,
+        nights_cash_cents: nightsCashCents,
       },
       isUpdate,
       req.session.staffMember.name
@@ -1409,8 +1434,8 @@ app.get("/kitchen/shop/:slug/chia-oats-prep", requireAuth, requireRole("kitchen"
 });
 
 // Combined cookie-baking schedule (choc chip / M&M per weekday) — one total
-// across Essendon, Highpoint and QTR Moonee Ponds, not split per shop,
-// which is why this lives at its own path rather than under one shop.
+// across Essendon, Highpoint and Quarter Two, not split per shop, which is
+// why this lives at its own path rather than under one shop.
 app.get("/kitchen/baking-list", requireAuth, requireRole("kitchen"), (req, res) => {
   const targets = db.prepare("SELECT * FROM cookie_bake_targets ORDER BY weekday").all();
   const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
