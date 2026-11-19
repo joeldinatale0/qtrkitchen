@@ -20,6 +20,7 @@ const {
   buildNaturalSearch,
   formatNaturalSearchEmail,
   buildCateringOrders,
+  debugRawParseCall,
 } = require("./shop-reports");
 
 const app = express();
@@ -1639,22 +1640,8 @@ app.get("/kitchen/admin/debug-catering-search", requireAuth, requireRole("kitche
 // content) to diagnose why parseNaturalQuery keeps getting truncated JSON.
 app.get("/kitchen/admin/debug-raw-claude", requireAuth, requireRole("kitchen"), async (req, res) => {
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-5-5",
-        max_tokens: 1000,
-        system: `Respond with ONLY this JSON, nothing else: {"domains": ["catering"], "shops": "all", "start": "2026-11-28", "end": "2026-11-28", "restated_question": "one short sentence", "focus_metric": null, "rank": false, "rank_order": "desc"}`,
-        messages: [{ role: "user", content: req.query.q || "For Friday 28th what do I need to prepare for catering?" }],
-      }),
-    });
-    const data = await r.json();
-    res.json({ httpStatus: r.status, stop_reason: data.stop_reason, usage: data.usage, content: data.content, model: data.model });
+    const result = await debugRawParseCall(req.query.q || "For Friday 28th what do I need to prepare for catering?");
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

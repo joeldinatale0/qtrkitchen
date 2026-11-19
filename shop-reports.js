@@ -737,13 +737,13 @@ function todayMelbourneStr() {
 // (sales/labour/cash/report/invoices/cogs), shops, an absolute date range, and —
 // for the cash/report domains, which have no messy name-matching problem —
 // which single number (if any) the question cares about and how to rank it.
-async function parseNaturalQuery(queryText) {
+function buildParseSystemPrompt() {
   const todayStr = todayMelbourneStr();
   const shopList = ALL_SHOP_SLUGS.map(
     (slug) => `${slug} = ${ALL_SHOP_NAMES[slug]}${SHOP_INTEGRATIONS[slug] ? "" : " (no Square/Tanda connected — sales/labour/report not available for this shop, only cash/invoices)"}`
   ).join(", ");
 
-  const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
+  return `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
 {"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices" and/or "cogs" and/or "catering"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
@@ -756,7 +756,10 @@ Rules for "domains" (include every one the question genuinely touches, usually j
 - "cogs": the cost to make a specific menu item, or several items combined — the per-item ingredient/COGS cost Joel has priced out per shop, for working out margins, bundle costs, or "what does X actually cost me". Use this for "what's my COGS on X", "combine the cost of X and Y", "what's my margin if I sell X at $Y". NOT the daily aggregate COGS % (that's "report").
 - "catering": catering/event orders — customer name, pickup or delivery, what needs to be prepped and in what quantity, for a specific event date or range. Use this for "what catering do we have on X", "what do I need to prep/make for catering on X", "who's picking up Saturday", "break down the catering orders this week". For this domain ONLY, "start"/"end" are the EVENT date(s) being asked about and MAY be in the future (do not cap at today) — "the 28th" or "this Saturday" means that calendar date, not a trading-data lookback window.
 Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}) for every domain EXCEPT "catering" (which can be a future date, see above); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". The date range is ignored by "cogs" (those costs aren't time-series) but must still be present and valid. If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
+}
 
+async function parseNaturalQuery(queryText) {
+  const system = buildParseSystemPrompt();
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
   const parsed = extractJson(text, "parseNaturalQuery");
 
@@ -789,6 +792,29 @@ Resolve relative dates ("past 30 days", "last quarter", "this month", "today") i
     rank: Boolean(parsed.rank),
     rankOrder: parsed.rank_order === "asc" ? "asc" : "desc",
   };
+}
+
+// TEMP (remove after use): run the REAL production parseNaturalQuery system
+// prompt through the Anthropic API directly (no retry, no extractJson), to
+// see the raw stop_reason/usage/content when diagnosing a truncation bug.
+async function debugRawParseCall(queryText) {
+  const system = buildParseSystemPrompt();
+  const res = await fetch(CLAUDE_API_BASE, {
+    method: "POST",
+    headers: {
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-5-5",
+      max_tokens: 1000,
+      system,
+      messages: [{ role: "user", content: queryText }],
+    }),
+  });
+  const data = await res.json();
+  return { httpStatus: res.status, stop_reason: data.stop_reason, usage: data.usage, content: data.content, model: data.model, systemPromptLength: system.length };
 }
 
 // Pull every distinct name+variation sold by each shop in the window, with
@@ -1717,4 +1743,5 @@ module.exports = {
   buildNaturalSearch,
   formatNaturalSearchEmail,
   buildCateringOrders,
+  debugRawParseCall,
 };
