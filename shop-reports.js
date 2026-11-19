@@ -735,7 +735,7 @@ async function parseNaturalQuery(queryText) {
   const system = `You convert a cafe owner's plain-English question into strict JSON, nothing else.
 Today's date (Melbourne time) is ${todayStr}. Shops: ${shopList}.
 Respond with ONLY the raw JSON object below — no markdown code fences, no explanation before or after it.
-{"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices" and/or "cogs"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
+{"domains": ["sales" and/or "labour" and/or "cash" and/or "report" and/or "invoices" and/or "cogs" and/or "catering"], "shops": ["slug", ...] or "all", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "restated_question": "one short plain-English sentence restating what is being asked and over what period", "focus_metric": "snake_case name of the one number the question cares about, only for the cash/report domains (one of: discrepancy, till_amount, cash_sales, eftpos_sales, uber_sales, cash_amount, float, net_sales, labour_pct, cogs_pct, prime_cost_pct, labour_hours, labour_cost, transaction_count, avg_spend, discounts), or null if it wants the full picture rather than one number", "rank": true or false, "rank_order": "desc" or "asc"}
 Rules for "domains" (include every one the question genuinely touches, usually just one):
 - "sales": what sold, revenue, items, drinks, food (Square — money coming IN from customers).
 - "labour": hours worked, staff, employees, shifts, wages, rostering, labour cost.
@@ -743,7 +743,8 @@ Rules for "domains" (include every one the question genuinely touches, usually j
 - "report": the derived daily performance numbers (COGS %, labour %, prime cost %, net sales vs target) — use this for labour % or $ labour cost on ANY day that is not today, even a single day, since live labour cost only exists for today; also use it for a multi-day trend of these numbers. NOT for a single day's raw sales or raw hours, which belong to "sales"/"labour".
 - "invoices": what a shop was INVOICED/CHARGED by the central kitchen for its weekly food/paper-goods orders — item quantities, prices, weekly totals, whether that week's invoice has been sent. This is a COST going OUT to the shop, the opposite of "sales" — never confuse the two. Use this for "pull up an invoice", "how much was X invoiced", "what did X order last week and what did it cost".
 - "cogs": the cost to make a specific menu item, or several items combined — the per-item ingredient/COGS cost Joel has priced out per shop, for working out margins, bundle costs, or "what does X actually cost me". Use this for "what's my COGS on X", "combine the cost of X and Y", "what's my margin if I sell X at $Y". NOT the daily aggregate COGS % (that's "report").
-Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". The date range is ignored by "cogs" (those costs aren't time-series) but must still be present and valid. If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
+- "catering": catering/event orders — customer name, pickup or delivery, what needs to be prepped and in what quantity, for a specific event date or range. Use this for "what catering do we have on X", "what do I need to prep/make for catering on X", "who's picking up Saturday", "break down the catering orders this week". For this domain ONLY, "start"/"end" are the EVENT date(s) being asked about and MAY be in the future (do not cap at today) — "the 28th" or "this Saturday" means that calendar date, not a trading-data lookback window.
+Resolve relative dates ("past 30 days", "last quarter", "this month", "today") into absolute dates, ending no later than today (${todayStr}) for every domain EXCEPT "catering" (which can be a future date, see above); default a vague/relative range to end yesterday instead of today, since today's trading/shifts may be incomplete, UNLESS the question explicitly says "today". The date range is ignored by "cogs" (those costs aren't time-series) but must still be present and valid. If no shop is named, or "all shops"/"across all shops" is said, use "all"; if a shop is named, use only its slug(s) from the list above. "rank" is true only if explicitly asked to rank/order by highest/lowest/most/least. Keep "restated_question" to one plain sentence — brevity matters here.`;
 
   const text = await callClaude({ system, userText: queryText, model: "claude-haiku-5-5", maxTokens: 1000 });
   const parsed = extractJson(text, "parseNaturalQuery");
@@ -763,7 +764,7 @@ Resolve relative dates ("past 30 days", "last quarter", "this month", "today") i
     throw new Error("Could not resolve a valid date range from the question");
   }
 
-  const validDomains = ["sales", "labour", "cash", "report", "invoices", "cogs"];
+  const validDomains = ["sales", "labour", "cash", "report", "invoices", "cogs", "catering"];
   let domains = Array.isArray(parsed.domains) ? parsed.domains.filter((d) => validDomains.includes(d)) : [];
   if (domains.length === 0) domains = ["sales"];
 
@@ -1432,6 +1433,115 @@ function formatCogsPart(cogs) {
   return lines.join("\n");
 }
 
+// ---- Catering side of natural-language search ----
+// Manual orders (WhatsApp/phone/email) carry a real event_date and filter
+// directly. Square checkout orders have no native event-date field (only a
+// free-text "Event Date: ..." marker inside customer_note — see
+// parseCateringNote), so they're fetched over the same recent-past +
+// near-future PLACED-date window the human catering admin page itself
+// browses by default, then kept only if their parsed event date actually
+// falls inside the range being asked about.
+function normalizeEventDateForMatch(raw) {
+  if (!raw) return null;
+  const iso = raw.match(/\d{4}-\d{2}-\d{2}/);
+  if (iso) return iso[0];
+  const au = raw.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (au) {
+    const [, d, m, y] = au;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const parsed = new Date(raw);
+  return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+async function buildCateringSearchPart(db, parse) {
+  const manualRows = db
+    .prepare(
+      "SELECT * FROM catering_orders_manual WHERE substr(event_date, 1, 10) >= ? AND substr(event_date, 1, 10) <= ? ORDER BY event_date"
+    )
+    .all(parse.start, parse.end);
+  const manualOrders = manualRows.map((row) => ({
+    source: "manual",
+    customer: row.customer_name || "",
+    eventDate: row.event_date || "",
+    fulfillment: row.fulfillment || "",
+    address: row.address || "",
+    notes: row.notes || "",
+    total: row.total_cents !== null ? row.total_cents / 100 : null,
+    lineItems: JSON.parse(row.items_json),
+  }));
+
+  let squareOrders = [];
+  let squareError = null;
+  let unparsedCount = 0;
+  try {
+    const todayStr = todayMelbourneStr();
+    const placedStart = addDaysISO(todayStr, -14);
+    const placedEnd = addDaysISO(todayStr, 60);
+    const allSquare = await buildCateringOrders(placedStart, placedEnd);
+    for (const o of allSquare) {
+      const normalized = normalizeEventDateForMatch(o.eventDate);
+      if (normalized === null) {
+        unparsedCount++;
+        continue;
+      }
+      if (normalized >= parse.start && normalized <= parse.end) {
+        squareOrders.push({
+          source: "square",
+          customer: o.customer,
+          eventDate: normalized,
+          fulfillment: o.fulfillment,
+          address: o.address,
+          notes: o.notes,
+          total: o.total,
+          lineItems: o.lineItems,
+        });
+      }
+    }
+  } catch (err) {
+    squareError = err.message;
+  }
+
+  const orders = [...manualOrders, ...squareOrders].sort((a, b) => (a.eventDate || "").localeCompare(b.eventDate || ""));
+  return { orders, squareError, unparsedCount, start: parse.start, end: parse.end };
+}
+
+function formatCateringPart(catering) {
+  const lines = [`CATERING (${catering.start} to ${catering.end})`, ``];
+  if (catering.squareError) lines.push(`(Square catering checkout data unavailable: ${catering.squareError})`, ``);
+  if (catering.unparsedCount) {
+    lines.push(
+      `(${catering.unparsedCount} Square checkout order(s) had an event date that could not be parsed — excluded.)`,
+      ``
+    );
+  }
+
+  if (catering.orders.length === 0) {
+    lines.push(`No catering orders found for this period (checked manual orders and, where connected, Square checkout orders placed in the usual recent/near-future browse window).`);
+    return lines.join("\n");
+  }
+
+  const itemTotals = {};
+  for (const o of catering.orders) {
+    const who = o.customer ? o.customer : "(no name given)";
+    lines.push(`${o.eventDate} — ${who}${o.fulfillment ? ` — ${o.fulfillment}` : ""}${o.address ? ` — ${o.address}` : ""} [${o.source}]`);
+    for (const li of o.lineItems) {
+      lines.push(`    ${li.qty} x ${li.name}${li.amount ? ` — ${money(li.amount)}` : ""}`);
+      itemTotals[li.name] = (itemTotals[li.name] || 0) + (Number(li.qty) || 0);
+    }
+    if (o.total !== null && o.total !== undefined) lines.push(`    Order total: ${money(o.total)}`);
+    if (o.notes) lines.push(`    Notes: ${o.notes}`);
+    lines.push(``);
+  }
+
+  lines.push(`TOTAL ACROSS ALL ${catering.orders.length} ORDER(S) IN THIS PERIOD (combine/break this down further per the question):`);
+  for (const [name, qty] of Object.entries(itemTotals).sort((a, b) => b[1] - a[1])) {
+    lines.push(`    ${qty} x ${name}`);
+  }
+
+  return lines.join("\n");
+}
+
 // Final step: hand the original question + the real retrieved numbers to
 // Claude and have it actually answer — including any arithmetic or
 // hypothetical ("what if sales were $2k higher") the question needs. This
@@ -1440,7 +1550,7 @@ function formatCogsPart(cogs) {
 // reason over it, never invent a figure.
 async function synthesizeAnswer(queryText, dataText) {
   const system = `A cafe owner asked: "${queryText}"
-Below is the real sales/labour/cash/report/invoices/cogs data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, or working out a margin from a COGS cost and a sell price — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, and sales are REVENUE from customers — never add or confuse these.
+Below is the real sales/labour/cash/report/invoices/cogs/catering data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, working out a margin from a COGS cost and a sell price, or totalling a prep list across several catering orders (e.g. adding up every "x N" line of a given ingredient/item across multiple orders on the same day) — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. If the question asks what needs to be prepped/made for catering, give a clear per-order breakdown (which items, how many, for which named order) AND a combined total per item if several orders share the same day — the data below already includes a pre-computed "TOTAL ACROSS ALL ORDERS" section for this, but double-check it against the per-order lines before trusting it. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, catering orders are upcoming prep/fulfilment jobs (not past sales), and sales are REVENUE from customers — never add or confuse these.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
   return callClaude({ system, userText: dataText || "(no data found for this period)", model: "claude-sonnet-5-5", maxTokens: 1000 });
@@ -1465,6 +1575,7 @@ async function buildNaturalSearch(db, queryText) {
   if (parse.domains.includes("report")) result.report = buildReportSearchPart(db, parse);
   if (parse.domains.includes("invoices")) result.invoices = buildInvoiceSearchPart(db, parse);
   if (parse.domains.includes("cogs")) result.cogs = buildCogsSearchPart(parse);
+  if (parse.domains.includes("catering")) jobs.push(buildCateringSearchPart(db, parse).then((r) => (result.catering = r)));
   await Promise.all(jobs);
 
   const dataParts = [];
@@ -1474,6 +1585,7 @@ async function buildNaturalSearch(db, queryText) {
   if (result.report) dataParts.push(formatReportPart(result.report));
   if (result.invoices) dataParts.push(formatInvoicePart(result.invoices));
   if (result.cogs) dataParts.push(formatCogsPart(result.cogs));
+  if (result.catering) dataParts.push(formatCateringPart(result.catering));
 
   try {
     result.answer = await synthesizeAnswer(queryText, dataParts.join("\n\n"));
@@ -1501,7 +1613,8 @@ function formatNaturalSearchEmail(result) {
   if (result.cash) lines.push(formatCashPart(result.cash), ``);
   if (result.report) lines.push(formatReportPart(result.report), ``);
   if (result.invoices) lines.push(formatInvoicePart(result.invoices), ``);
-  if (result.cogs) lines.push(formatCogsPart(result.cogs));
+  if (result.cogs) lines.push(formatCogsPart(result.cogs), ``);
+  if (result.catering) lines.push(formatCateringPart(result.catering));
 
   return {
     subject: `Search — ${result.restatedQuestion}`.slice(0, 200),
