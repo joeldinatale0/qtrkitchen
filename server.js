@@ -273,32 +273,55 @@ async function sendWeeklySummaryIfDue() {
     if (already) continue;
 
     try {
-      const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
+      // Two separate invoices per shop — Food and Paper Goods are
+      // different cost categories, so Joel files/reconciles them
+      // separately. Skip attaching a category's PDF for a week it had
+      // zero items in, rather than sending an empty invoice every week.
+      const attachments = [];
+      const sections = [];
 
-      const pdfBuffer = await buildWeeklySummaryPdf(
-        shop,
-        formatDate(weekStart),
-        formatDate(weekEnd),
-        dailyBreakdown,
-        weeklyTotals
-      );
+      const food = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "food");
+      if (food.weeklyTotals.length > 0) {
+        const foodPdf = await buildWeeklySummaryPdf(
+          shop,
+          formatDate(weekStart),
+          formatDate(weekEnd),
+          food.dailyBreakdown,
+          food.weeklyTotals
+        );
+        attachments.push({ filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`, content: foodPdf.toString("base64") });
+        sections.push("Food");
+      }
 
-      await sendEmail({
-        to: DAILY_REPORT_EMAIL_TO,
-        subject: `Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
-        text: `Attached: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
-        attachments: [
-          {
-            filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`,
-            content: pdfBuffer.toString("base64"),
-          },
-        ],
-      });
+      const paper = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "paper");
+      if (paper.weeklyTotals.length > 0) {
+        const paperPdf = await buildWeeklySummaryPdf(
+          { ...shop, name: `${shop.name} (Paper Goods)` },
+          formatDate(weekStart),
+          formatDate(weekEnd),
+          paper.dailyBreakdown,
+          paper.weeklyTotals
+        );
+        attachments.push({
+          filename: `weekly-invoice-paper-goods-${shop.slug}-${weekStart}.pdf`,
+          content: paperPdf.toString("base64"),
+        });
+        sections.push("Paper Goods");
+      }
+
+      if (attachments.length > 0) {
+        await sendEmail({
+          to: DAILY_REPORT_EMAIL_TO,
+          subject: `Weekly Invoices — ${shop.name} — ${weekStart} to ${weekEnd}`,
+          text: `Attached: itemised weekly invoice(s) for ${shop.name} covering ${weekStart} to ${weekEnd} — ${sections.join(" and ")}.`,
+          attachments,
+        });
+      }
 
       db.prepare(
         "INSERT INTO invoice_log (week_start_date, shop_id) VALUES (?, ?)"
       ).run(weekStart, shop.id);
-      console.log(`Weekly summary emailed for ${shop.name}, week of ${weekStart}`);
+      console.log(`Weekly summary emailed for ${shop.name}, week of ${weekStart} (${sections.join(", ") || "nothing to invoice"})`);
     } catch (err) {
       console.error(`Weekly summary failed for ${shop.name}:`, err.message);
     }
@@ -1365,15 +1388,39 @@ app.post("/kitchen/shop/:slug/invoices/:weekStart/resend", requireAuth, requireR
   try {
     const weekStart = req.params.weekStart;
     const weekEnd = addDays(weekStart, 6);
-    const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
-    const pdfBuffer = await buildWeeklySummaryPdf(shop, formatDate(weekStart), formatDate(weekEnd), dailyBreakdown, weeklyTotals);
+
+    const attachments = [];
+    const sections = [];
+
+    const food = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "food");
+    if (food.weeklyTotals.length > 0) {
+      const foodPdf = await buildWeeklySummaryPdf(shop, formatDate(weekStart), formatDate(weekEnd), food.dailyBreakdown, food.weeklyTotals);
+      attachments.push({ filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`, content: foodPdf.toString("base64") });
+      sections.push("Food");
+    }
+
+    const paper = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "paper");
+    if (paper.weeklyTotals.length > 0) {
+      const paperPdf = await buildWeeklySummaryPdf(
+        { ...shop, name: `${shop.name} (Paper Goods)` },
+        formatDate(weekStart),
+        formatDate(weekEnd),
+        paper.dailyBreakdown,
+        paper.weeklyTotals
+      );
+      attachments.push({
+        filename: `weekly-invoice-paper-goods-${shop.slug}-${weekStart}.pdf`,
+        content: paperPdf.toString("base64"),
+      });
+      sections.push("Paper Goods");
+    }
 
     const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
     await sendEmail({
       to,
-      subject: `RESENT Weekly Invoice — ${shop.name} — ${weekStart} to ${weekEnd}`,
-      text: `Re-sent: itemised weekly invoice for ${shop.name} covering ${weekStart} to ${weekEnd}.`,
-      attachments: [{ filename: `weekly-invoice-${shop.slug}-${weekStart}.pdf`, content: pdfBuffer.toString("base64") }],
+      subject: `RESENT Weekly Invoices — ${shop.name} — ${weekStart} to ${weekEnd}`,
+      text: `Re-sent: itemised weekly invoice(s) for ${shop.name} covering ${weekStart} to ${weekEnd} — ${sections.join(" and ") || "nothing to invoice"}.`,
+      attachments,
     });
 
     res.json({ ok: true, to });
