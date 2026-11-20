@@ -1348,50 +1348,6 @@ function generateUniquePin() {
   return pin;
 }
 
-// TEMP (remove after use): dump raw Tanda API shapes to find out whether
-// shifts/users carry per-shift cost or an hourly rate, so historical
-// labour $ cost can be computed instead of relying on the today-only
-// live_wage_tracker report.
-app.get("/kitchen/admin/debug-tanda-shape", requireAuth, requireRole("kitchen"), async (req, res) => {
-  try {
-    const date = req.query.date || addDays(melbourneDateString(), -1);
-    const locationId = req.query.location_id || "409591"; // Essendon
-    const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
-
-    const candidates = [
-      `/shifts?from=${date}&to=${date}&show_costs=true`,
-      `/rosters?from=${date}&to=${date}&show_costs=true`,
-      `/timesheets?from=${date}&to=${date}&show_costs=true`,
-    ];
-
-    const results = {};
-    for (const path of candidates) {
-      try {
-        const r = await fetch(`https://my.tanda.co/api/v2${path}`, { headers });
-        const text = await r.text();
-        let parsed;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          parsed = text.slice(0, 200);
-        }
-        results[path] = {
-          status: r.status,
-          isArray: Array.isArray(parsed),
-          keys: Array.isArray(parsed) ? (parsed[0] ? Object.keys(parsed[0]) : "empty array") : typeof parsed === "object" ? Object.keys(parsed) : parsed,
-          sample: Array.isArray(parsed) ? parsed[0] : parsed,
-        };
-      } catch (err) {
-        results[path] = { error: err.message };
-      }
-    }
-
-    res.json({ date, locationId, results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async (req, res) => {
   let tandaUsers = [];
   let tandaError = null;
