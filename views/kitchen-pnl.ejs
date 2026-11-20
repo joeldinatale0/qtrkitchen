@@ -1,0 +1,77 @@
+<%- include('partials/head', { title: "Daily P&L — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen">&larr; Admin</a></p>
+  <h1>Daily P&amp;L</h1>
+  <p class="subtitle">
+    Revenue, COGS and labour, per shop per day — live from Square and Tanda. This is a prime-cost view, not a full P&amp;L:
+    rent, utilities, salaries and other overhead aren't tracked in this system, so they're not included here.
+  </p>
+
+  <form method="GET" action="/kitchen/pnl" class="card" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
+    <div>
+      <label for="shop">Shop</label>
+      <select id="shop" name="shop" onchange="this.form.submit()">
+        <% shops.forEach(function(s) { %>
+          <option value="<%= s.slug %>" <%= s.slug === shopSlug ? 'selected' : '' %>><%= s.name %></option>
+        <% }) %>
+      </select>
+    </div>
+    <div>
+      <label for="date">Date</label>
+      <input type="date" id="date" name="date" value="<%= reportDate %>" max="<%= today %>" onchange="this.form.submit()" />
+    </div>
+  </form>
+
+  <% if (error) { %>
+    <p class="error" style="margin-top: 20px;">Couldn't build this report: <%= error %></p>
+  <% } else { %>
+    <div class="card" style="margin-top: 20px; max-width: 480px;">
+      <p class="item-name" style="margin-bottom: 4px;"><%= shopName %> — <%= formatDate(reportDate) %></p>
+      <% if (pnl.isToday) { %>
+        <p class="muted" style="margin-top: 0; margin-bottom: 16px;">Today's trading may not be fully complete yet.</p>
+      <% } %>
+
+      <div style="display: flex; flex-direction: column; gap: 10px; font-variant-numeric: tabular-nums;">
+        <div style="display: flex; justify-content: space-between; font-weight: 700; font-size: 1.1em;">
+          <span>Revenue</span>
+          <span>$<%= pnl.revenue.toFixed(2) %></span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; color: var(--muted, #666);">
+          <span>Less: COGS (<%= pnl.cogsPct !== null ? pnl.cogsPct.toFixed(1) + '%' : 'n/a' %>)</span>
+          <span>&minus;$<%= pnl.cogs.toFixed(2) %></span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; font-weight: 700; border-top: 1px solid #e0dcd3; padding-top: 10px;">
+          <span>Gross Profit</span>
+          <span>$<%= pnl.grossProfit.toFixed(2) %> <span class="muted" style="font-weight: 400;">(<%= pnl.grossProfitPct !== null ? pnl.grossProfitPct.toFixed(1) + '%' : 'n/a' %>)</span></span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; color: var(--muted, #666);">
+          <span>Less: Labour (<%= pnl.labourHours.toFixed(1) %> hrs<%= pnl.hasLabourCost ? ', ' + pnl.labourPct.toFixed(1) + '%' : '' %>)</span>
+          <span><%= pnl.hasLabourCost ? '&minus;$' + pnl.labourCost.toFixed(2) : 'n/a' %></span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; font-weight: 700; font-size: 1.15em; border-top: 2px solid var(--near-black); padding-top: 10px;">
+          <span>Profit (before overhead)</span>
+          <span><%= pnl.profit !== null ? '$' + pnl.profit.toFixed(2) + ' (' + pnl.profitPct.toFixed(1) + '%)' : 'n/a' %></span>
+        </div>
+      </div>
+
+      <% if (!pnl.hasLabourCost) { %>
+        <p class="muted" style="margin-top: 16px; margin-bottom: 0;">
+          Labour $ cost isn't available for past dates — Tanda only reports live cost for the current day.
+        </p>
+      <% } %>
+      <p class="muted" style="margin-top: 8px; margin-bottom: 0;">
+        COGS is priced on <%= pnl.cogsCoveragePct !== null ? pnl.cogsCoveragePct.toFixed(0) + '%' : 'n/a' %> of today's revenue —
+        the rest is unpriced menu items, so COGS (and everything below it) is a floor, not the exact number.
+      </p>
+    </div>
+  <% } %>
+</div>
+
+</body>
+</html>

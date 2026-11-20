@@ -1711,6 +1711,64 @@ app.post("/kitchen/reports/sales-adjustment", requireAuth, requireRole("kitchen"
   res.json({ ok: true });
 });
 
+// Daily P&L (Revenue / COGS / Labour only — no rent, utilities or other
+// overhead, which this system doesn't track) for one shop on one date.
+// Reuses the same live Square+Tanda computation as the daily report email,
+// just presented as a P&L instead of a plain-text report.
+app.get("/kitchen/pnl", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const shops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({
+    slug,
+    name: config.displayName,
+  }));
+
+  const shopSlug = SHOP_INTEGRATIONS[req.query.shop] ? req.query.shop : shops[0].slug;
+  const reportDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "") ? req.query.date : addDays(melbourneDateString(), -1);
+  const config = SHOP_INTEGRATIONS[shopSlug];
+
+  let report = null;
+  let error = null;
+  try {
+    report = await buildDailyShopReport(db, shopSlug, config.displayName, addDays, reportDate);
+    if (!report) error = "SQUARE_ACCESS_TOKEN or TANDA_ACCESS_TOKEN is missing for this shop.";
+  } catch (err) {
+    error = err.message;
+  }
+
+  let pnl = null;
+  if (report) {
+    const revenue = report.netSales;
+    const cogs = report.cogsDollars;
+    const grossProfit = revenue - cogs;
+    const hasLabourCost = report.labourCost !== null;
+    const profit = hasLabourCost ? grossProfit - report.labourCost : null;
+    pnl = {
+      revenue,
+      cogs,
+      cogsPct: report.cogsPct,
+      grossProfit,
+      grossProfitPct: revenue ? (grossProfit / revenue) * 100 : null,
+      labourHours: report.labourHours,
+      labourCost: report.labourCost,
+      labourPct: report.labourPct,
+      hasLabourCost,
+      profit,
+      profitPct: profit !== null && revenue ? (profit / revenue) * 100 : null,
+      cogsCoveragePct: report.cogsCoveragePct,
+      isToday: report.isToday,
+    };
+  }
+
+  res.render("kitchen-pnl", {
+    shops,
+    shopSlug,
+    shopName: config.displayName,
+    reportDate,
+    today: melbourneDateString(),
+    pnl,
+    error,
+  });
+});
+
 // Average daily cookie flavour sales (Sun-Sat) across the last N weeks,
 // per shop — ad hoc analytics route, JSON only (no view).
 app.get("/kitchen/reports/cookie-sales", requireAuth, requireRole("kitchen"), async (req, res) => {
