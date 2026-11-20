@@ -1359,14 +1359,9 @@ app.get("/kitchen/admin/debug-tanda-shape", requireAuth, requireRole("kitchen"),
     const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
 
     const candidates = [
-      `/timesheets?from=${date}&to=${date}`,
-      `/reports/cost_timelines?location_id=${locationId}&from=${date}&to=${date}`,
-      `/reports/costs?location_id=${locationId}&from=${date}&to=${date}`,
-      `/reports/cost_reports?location_id=${locationId}&from=${date}&to=${date}`,
-      `/reports/wage_cost?location_id=${locationId}&from=${date}&to=${date}`,
-      `/reports/costs_by_date?location_id=${locationId}&from=${date}&to=${date}`,
-      `/reports/timesheet_costing?location_id=${locationId}&from=${date}&to=${date}`,
-      `/shifts?from=${date}&to=${date}&include_cost=true`,
+      `/shifts?from=${date}&to=${date}&show_costs=true`,
+      `/rosters?from=${date}&to=${date}&show_costs=true`,
+      `/timesheets?from=${date}&to=${date}&show_costs=true`,
     ];
 
     const results = {};
