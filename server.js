@@ -1348,6 +1348,33 @@ function generateUniquePin() {
   return pin;
 }
 
+// TEMP (remove after use): dump raw Tanda API shapes to find out whether
+// shifts/users carry per-shift cost or an hourly rate, so historical
+// labour $ cost can be computed instead of relying on the today-only
+// live_wage_tracker report.
+app.get("/kitchen/admin/debug-tanda-shape", requireAuth, requireRole("kitchen"), async (req, res) => {
+  try {
+    const date = req.query.date || addDays(melbourneDateString(), -1);
+    const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
+    const [shiftsRes, usersRes] = await Promise.all([
+      fetch(`https://my.tanda.co/api/v2/shifts?from=${date}&to=${date}`, { headers }),
+      fetch(`https://my.tanda.co/api/v2/users`, { headers }),
+    ]);
+    const shifts = await shiftsRes.json();
+    const users = await usersRes.json();
+    res.json({
+      date,
+      sampleShift: shifts[0] || null,
+      shiftCount: shifts.length,
+      sampleUser: users[0] || null,
+      shiftKeys: shifts[0] ? Object.keys(shifts[0]) : [],
+      userKeys: users[0] ? Object.keys(users[0]) : [],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async (req, res) => {
   let tandaUsers = [];
   let tandaError = null;
