@@ -1348,19 +1348,6 @@ function generateUniquePin() {
   return pin;
 }
 
-// TEMP (remove after use): confirm the live SQLite path and disk free
-// space, for a one-off "where exactly is the data" explanation. DB_PATH
-// is a path, not a secret.
-app.get("/kitchen/admin/debug-storage-info", requireAuth, requireRole("kitchen"), (req, res) => {
-  let diskFree = null;
-  try {
-    diskFree = require("child_process").execSync(`df -h "${path.dirname(db.dbPath)}"`).toString();
-  } catch (err) {
-    diskFree = err.message;
-  }
-  res.json({ dbPath: db.dbPath, dbPathEnvVar: process.env.DB_PATH || null, diskFree });
-});
-
 app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async (req, res) => {
   let tandaUsers = [];
   let tandaError = null;
