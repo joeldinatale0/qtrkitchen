@@ -1,9 +1,9 @@
-<%- include('partials/head', { title: shop.name + " Orders — QTR Kitchen Ordering" }) %>
+<%- include('partials/head', { title: shop.name + " " + categoryLabel + " — QTR Kitchen Ordering" }) %>
 <%- include('partials/topbar') %>
 
 <div class="container">
   <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
-  <h1><%= shop.name %> — Food Orders</h1>
+  <h1><%= shop.name %> — <%= categoryLabel %></h1>
   <p class="subtitle">Every delivery date this shop has ordered, most recent first.</p>
 
   <% if (selected) { %>
@@ -46,7 +46,7 @@
               <td><%= d.total_items %></td>
               <td><%= d.status %></td>
               <td><% if (d.is_late) { %><span class="tag-late">Late</span><% } else { %>&mdash;<% } %></td>
-              <td><a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/orders?date=<%= d.delivery_date %>">View</a></td>
+              <td><a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/<%= basePath %>?date=<%= d.delivery_date %>">View</a></td>
             </tr>
           <% }) %>
         </tbody>

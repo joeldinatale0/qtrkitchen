@@ -1,10 +1,13 @@
-<%- include('partials/head', { title: shop.name + " Invoices — QTR Kitchen Ordering" }) %>
+<%- include('partials/head', { title: shop.name + " " + categoryLabel + " — QTR Kitchen Ordering" }) %>
 <%- include('partials/topbar') %>
 
 <div class="container">
   <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
-  <h1><%= shop.name %> — Weekly Invoices</h1>
-  <p class="subtitle">Every week an invoice has been sent, most recent first. Click to view/download the PDF.</p>
+  <h1><%= shop.name %> — <%= categoryLabel %></h1>
+  <p class="subtitle">
+    Every week an invoice has been sent, most recent first — one combined invoice is actually emailed/sent per week;
+    this is just a <%= categoryLabel.toLowerCase() %> breakdown of that same invoice. Click to view/download the PDF.
+  </p>
 
   <div class="card">
     <% if (weeks.length === 0) { %>
@@ -20,7 +23,7 @@
               <td><%= formatDate(w.week_start_date) %></td>
               <td><%= w.sent_at %></td>
               <td>
-                <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/invoices/<%= w.week_start_date %>.pdf" target="_blank">View PDF</a>
+                <a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/<%= basePath %>/<%= w.week_start_date %>.pdf" target="_blank">View PDF</a>
                 <form class="inline-form" method="POST" action="/kitchen/shop/<%= shop.slug %>/invoices/<%= w.week_start_date %>/resend"
                       onsubmit="event.preventDefault(); fetch(this.action,{method:'POST'}).then(r=>r.json()).then(d=>alert(d.ok ? ('Resent to '+d.to) : ('Failed: '+d.error)));">
                   <button class="btn btn-small" type="submit">Resend</button>

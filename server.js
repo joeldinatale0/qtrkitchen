@@ -204,14 +204,21 @@ async function sendDailyBackupIfDue() {
 }
 
 // Shared by the Monday auto-email and the on-demand admin PDF view.
-function buildWeeklyInvoiceData(shopId, weekStart, weekEnd) {
+// category: undefined/null = everything (the real combined invoice that
+// actually gets emailed/logged); "food" = everything except Paper Goods;
+// "paper" = Paper Goods only. The two filtered forms are admin-viewing-only
+// breakdowns — they don't change what's actually invoiced/emailed weekly.
+function buildWeeklyInvoiceData(shopId, weekStart, weekEnd, category) {
+  const categoryClause =
+    category === "food" ? "AND c.slug != 'paper'" : category === "paper" ? "AND c.slug = 'paper'" : "";
   const dailyRows = db
     .prepare(
       `SELECT o.delivery_date, oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
        LEFT JOIN items i ON i.id = oi.item_id
-       WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE o.shop_id = ? AND o.delivery_date BETWEEN ? AND ? AND oi.item_id IS NOT NULL ${categoryClause}
        GROUP BY o.delivery_date, oi.name, oi.unit
        ORDER BY o.delivery_date, oi.name`
     )
@@ -1209,35 +1216,68 @@ app.get("/kitchen/shop/:slug", requireAuth, requireRole("kitchen"), (req, res) =
   res.render("kitchen-shop-hub", { shop, hasReports: Boolean(SHOP_INTEGRATIONS[shop.slug]) });
 });
 
-app.get("/kitchen/shop/:slug/orders", requireAuth, requireRole("kitchen"), (req, res) => {
-  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
-  if (!shop) return res.status(404).send("Shop not found");
+// Food and Paper Goods orders share the same orders/order_items tables
+// (see POST /order and POST /order/paper-goods), so the admin orders view
+// is split by category here rather than by a different data source.
+function renderShopOrders(category) {
+  const categoryLabel = category === "paper" ? "Paper Goods Orders" : "Food Orders";
+  const basePath = category === "paper" ? "orders/paper-goods" : "orders";
+  const datesItemsClause =
+    category === "paper"
+      ? "oi.item_id IS NOT NULL AND c.slug = 'paper'"
+      : "(oi.item_id IS NULL OR c.slug != 'paper')";
 
-  const dates = db
-    .prepare(
-      `SELECT o.delivery_date, o.status, o.is_late,
-              SUM(CASE WHEN oi.item_id IS NOT NULL THEN oi.quantity ELSE 0 END) AS total_items
-       FROM orders o
-       LEFT JOIN order_items oi ON oi.order_id = o.id
-       WHERE o.shop_id = ?
-       GROUP BY o.id
-       ORDER BY o.delivery_date DESC`
-    )
-    .all(shop.id);
+  return (req, res) => {
+    const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+    if (!shop) return res.status(404).send("Shop not found");
 
-  let selected = null;
-  if (req.query.date) {
-    const order = db
-      .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
-      .get(shop.id, req.query.date);
-    if (order) {
-      const items = db.prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id").all(order.id);
-      selected = { order, items };
+    const dates = db
+      .prepare(
+        `SELECT o.delivery_date, o.status, o.is_late,
+                SUM(CASE WHEN ${datesItemsClause} THEN oi.quantity ELSE 0 END) AS total_items
+         FROM orders o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         LEFT JOIN items i ON i.id = oi.item_id
+         LEFT JOIN categories c ON c.id = i.category_id
+         WHERE o.shop_id = ?
+         GROUP BY o.id
+         HAVING total_items > 0
+         ORDER BY o.delivery_date DESC`
+      )
+      .all(shop.id);
+
+    let selected = null;
+    if (req.query.date) {
+      const order = db
+        .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+        .get(shop.id, req.query.date);
+      if (order) {
+        const items = db
+          .prepare(
+            `SELECT oi.* FROM order_items oi
+             LEFT JOIN items i ON i.id = oi.item_id
+             LEFT JOIN categories c ON c.id = i.category_id
+             WHERE oi.order_id = ? AND ${datesItemsClause}
+             ORDER BY oi.id`
+          )
+          .all(order.id);
+        selected = { order, items };
+      }
     }
-  }
 
-  res.render("kitchen-shop-orders", { shop, dates, selected, selectedDate: req.query.date || null });
-});
+    res.render("kitchen-shop-orders", {
+      shop,
+      dates,
+      selected,
+      selectedDate: req.query.date || null,
+      categoryLabel,
+      basePath,
+    });
+  };
+}
+
+app.get("/kitchen/shop/:slug/orders", requireAuth, requireRole("kitchen"), renderShopOrders("food"));
+app.get("/kitchen/shop/:slug/orders/paper-goods", requireAuth, requireRole("kitchen"), renderShopOrders("paper"));
 
 app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (req, res) => {
   const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
@@ -1250,22 +1290,29 @@ app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (re
   res.render("kitchen-shop-eod-cash", { shop, sheets });
 });
 
-app.get("/kitchen/shop/:slug/invoices", requireAuth, requireRole("kitchen"), (req, res) => {
-  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
-  if (!shop) return res.status(404).send("Shop not found");
+// Same split as orders above: one real combined invoice is actually
+// invoiced/emailed/logged per shop per week (see invoice_log and the
+// Sunday auto-send), but the admin can view a Food-only or Paper-Goods-only
+// breakdown of that same week on demand — these PDFs are generated fresh,
+// not stored separately.
+function renderShopInvoices(category) {
+  const categoryLabel = category === "paper" ? "Paper Goods Order Invoices" : "Food Order Invoices";
+  const basePath = category === "paper" ? "invoices/paper-goods" : "invoices";
 
-  const weeks = db
-    .prepare("SELECT week_start_date, sent_at FROM invoice_log WHERE shop_id = ? ORDER BY week_start_date DESC")
-    .all(shop.id);
+  return (req, res) => {
+    const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+    if (!shop) return res.status(404).send("Shop not found");
 
-  res.render("kitchen-shop-invoices", { shop, weeks });
-});
+    const weeks = db
+      .prepare("SELECT week_start_date, sent_at FROM invoice_log WHERE shop_id = ? ORDER BY week_start_date DESC")
+      .all(shop.id);
 
-app.get(
-  "/kitchen/shop/:slug/invoices/:weekStart.pdf",
-  requireAuth,
-  requireRole("kitchen"),
-  async (req, res) => {
+    res.render("kitchen-shop-invoices", { shop, weeks, categoryLabel, basePath });
+  };
+}
+
+function renderInvoicePdf(category) {
+  return async (req, res) => {
     const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
     if (!shop) return res.status(404).send("Shop not found");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.weekStart)) return res.status(400).send("Invalid week");
@@ -1277,21 +1324,33 @@ app.get(
       // 7-day window starting there, exactly as it was actually invoiced.
       const weekStart = req.params.weekStart;
       const weekEnd = addDays(weekStart, 6);
-      const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd);
+      const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, category);
+      const pdfShop = category === "paper" ? { ...shop, name: `${shop.name} (Paper Goods)` } : shop;
       const pdfBuffer = await buildWeeklySummaryPdf(
-        shop,
+        pdfShop,
         formatDate(weekStart),
         formatDate(weekEnd),
         dailyBreakdown,
         weeklyTotals
       );
+      const filenamePrefix = category === "paper" ? "weekly-invoice-paper-goods" : "weekly-invoice";
       res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `inline; filename="weekly-invoice-${shop.slug}-${weekStart}.pdf"`);
+      res.set("Content-Disposition", `inline; filename="${filenamePrefix}-${shop.slug}-${weekStart}.pdf"`);
       res.send(pdfBuffer);
     } catch (err) {
       res.status(500).send(`Failed to build invoice: ${err.message}`);
     }
-  }
+  };
+}
+
+app.get("/kitchen/shop/:slug/invoices", requireAuth, requireRole("kitchen"), renderShopInvoices("food"));
+app.get("/kitchen/shop/:slug/invoices/paper-goods", requireAuth, requireRole("kitchen"), renderShopInvoices("paper"));
+app.get("/kitchen/shop/:slug/invoices/:weekStart.pdf", requireAuth, requireRole("kitchen"), renderInvoicePdf("food"));
+app.get(
+  "/kitchen/shop/:slug/invoices/paper-goods/:weekStart.pdf",
+  requireAuth,
+  requireRole("kitchen"),
+  renderInvoicePdf("paper")
 );
 
 // Rebuilds and re-emails an already-sent weekly invoice — e.g. after
