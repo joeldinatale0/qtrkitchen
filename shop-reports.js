@@ -204,18 +204,22 @@ async function fetchTandaDepartmentIds(tandaLocationId) {
   return new Set(departments.filter((d) => d.location_id === tandaLocationId).map((d) => d.id));
 }
 
+// show_costs=true (undocumented in any search-findable Tanda API reference —
+// found by reading TandaHQ's own archived tanda.js client library source on
+// GitHub) adds a real per-shift `cost` field, award-interpreted, that works
+// for PAST dates too — unlike live_wage_tracker below, which only works for
+// today. Used for every past-date labour $ figure in this app.
 async function fetchTandaShifts(dateStr) {
-  const res = await fetch(`${TANDA_API_BASE}/shifts?from=${dateStr}&to=${dateStr}`, {
+  const res = await fetch(`${TANDA_API_BASE}/shifts?from=${dateStr}&to=${dateStr}&show_costs=true`, {
     headers: tandaHeaders(),
   });
   if (!res.ok) throw new Error(`Tanda shifts failed: ${res.status} ${await res.text()}`);
   return res.json();
 }
 
-// live_wage_tracker only ever reports the CURRENT day, cumulatively — it
-// cannot be queried for past dates. That's why the report runs at a fixed
-// time each day (5pm) rather than after midnight: it's the only way to
-// capture a day's real $ labour cost at all.
+// Only used for TODAY — an in-progress shift usually has no `cost` yet from
+// show_costs (it's computed from a finished shift), so the real-time
+// tracker is still the right source while someone is still clocked in.
 async function fetchTandaLiveLabourCost(tandaLocationId) {
   const res = await fetch(`${TANDA_API_BASE}/reports/live_wage_tracker?location_id=${tandaLocationId}`, {
     headers: tandaHeaders(),
@@ -234,9 +238,15 @@ function summarizeTandaShifts(shifts, departmentIds, dateStr, now) {
   const buckets = hourBucketsUtc(dateStr);
   const hourly = {}; // hour -> hours worked
   let totalHours = 0;
+  let totalCost = 0;
+  let hasCost = false;
 
   for (const shift of shifts) {
     if (!departmentIds.has(shift.department_id)) continue;
+    if (typeof shift.cost === "number") {
+      hasCost = true;
+      totalCost += shift.cost;
+    }
     if (!shift.start) continue;
     const start = new Date(shift.start * 1000);
     const finish = shift.finish ? new Date(shift.finish * 1000) : now; // still clocked in
@@ -269,7 +279,7 @@ function summarizeTandaShifts(shifts, departmentIds, dateStr, now) {
     }
   }
 
-  return { totalHours, hourly };
+  return { totalHours, hourly, totalCost, hasCost };
 }
 
 // Ranks product stats {name: {revenue, qty}} by revenue, returning
@@ -323,10 +333,15 @@ async function buildDailyShopReport(db, shopSlug, shopName, addDays, overrideDat
 
   const shifts = await fetchTandaShifts(dateStr);
   const labour = summarizeTandaShifts(shifts, departmentIds, dateStr, isToday ? now : new Date(endUtc));
-  // Tanda's live wage tracker only ever reports the CURRENT day's cumulative
-  // cost — it cannot be queried for a past date, so for any date other than
-  // today the $ labour cost is genuinely unavailable (not faked as $0).
-  let labourCost = isToday ? await fetchTandaLiveLabourCost(config.tandaLocationId) : null;
+  // For today, prefer the real-time tracker (shifts still in progress don't
+  // have a `cost` yet). For any past date, sum the real per-shift award
+  // cost from show_costs — only fall back to null if Tanda genuinely never
+  // costed any shift that day (e.g. nothing worked, or not costed yet).
+  let labourCost = isToday
+    ? await fetchTandaLiveLabourCost(config.tandaLocationId)
+    : labour.hasCost
+    ? labour.totalCost
+    : null;
 
   // Manual corrections (e.g. a shift logged against the wrong location).
   const adjustment = db
@@ -1300,10 +1315,11 @@ function formatReportPart(report) {
 
   let rows = report.rows.map((r) => ({ ...r, shopName: (SHOP_INTEGRATIONS[r.shop_slug] || {}).displayName || r.shop_slug }));
   const metric = report.focusMetric ? REPORT_METRICS[report.focusMetric] : null;
-  // null/undefined means genuinely not available (e.g. Tanda only ever
-  // reports live $ labour cost for TODAY, never a backfilled past day) —
-  // `null / 100` and `null || 0` both silently evaluate to 0 in JS, which
-  // would otherwise print a real $0.00 / 0.0% instead of "not available".
+  // null/undefined means genuinely not available for this specific day —
+  // e.g. a snapshot saved before Tanda's show_costs backfill fix, or a day
+  // nobody worked — `null / 100` and `null || 0` both silently evaluate to
+  // 0 in JS, which would otherwise print a real $0.00 / 0.0% instead of
+  // "not available".
   const fmt = (r, m) => {
     const v = r[m.col];
     if (v === null || v === undefined) return "n/a";
@@ -1325,7 +1341,7 @@ function formatReportPart(report) {
         `    Net sales: ${money(r.net_sales_cents / 100)}  Labour %: ${pctOrNa(r.labour_pct)}  COGS %: ${pctOrNa(r.cogs_pct)}  Prime cost %: ${pctOrNa(r.prime_cost_pct)}`
       );
       if (r.labour_cost_cents === null || r.labour_cost_cents === undefined) {
-        lines.push(`    ($ labour cost not available for this day — Tanda only reports live cost for today, never a past date)`);
+        lines.push(`    ($ labour cost not available for this specific day — not captured in the saved snapshot)`);
       }
     }
   });
@@ -1582,7 +1598,7 @@ function formatCateringPart(catering) {
 // reason over it, never invent a figure.
 async function synthesizeAnswer(queryText, dataText) {
   const system = `A cafe owner asked: "${queryText}"
-Below is the real sales/labour/cash/report/invoices/cogs/catering data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, working out a margin from a COGS cost and a sell price, or totalling a prep list across several catering orders (e.g. adding up every "x N" line of a given ingredient/item across multiple orders on the same day) — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. If the question asks what needs to be prepped/made for catering, give a clear per-order breakdown (which items, how many, for which named order) AND a combined total per item if several orders share the same day — the data below already includes a pre-computed "TOTAL ACROSS ALL ORDERS" section for this, but double-check it against the per-order lines before trusting it. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist (for example: Tanda only ever reports live $ labour cost for today, never a past date) — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, catering orders are upcoming prep/fulfilment jobs (not past sales), and sales are REVENUE from customers — never add or confuse these.
+Below is the real sales/labour/cash/report/invoices/cogs/catering data already pulled for the period and shop(s) their question needs. Answer their question directly and plainly, in 2-6 sentences of prose (not JSON, not a list unless the question itself asks for a breakdown). Do any arithmetic the question needs yourself — including hypotheticals like "if sales were $2k higher", combining several COGS lines, working out a margin from a COGS cost and a sell price, or totalling a prep list across several catering orders (e.g. adding up every "x N" line of a given ingredient/item across multiple orders on the same day) — using ONLY the real numbers given below, and show the calculation briefly so it is checkable. If the question asks what needs to be prepped/made for catering, give a clear per-order breakdown (which items, how many, for which named order) AND a combined total per item if several orders share the same day — the data below already includes a pre-computed "TOTAL ACROSS ALL ORDERS" section for this, but double-check it against the per-order lines before trusting it. Never invent a number that is not in the data below. Where a figure is marked "n/a" or says "not available", that means the number genuinely does not exist for that specific day — treat it as missing, NEVER as zero, and say plainly that it is not available rather than computing with it as 0. Remember invoices are a COST to the shop, COGS is the cost to make one menu item, catering orders are upcoming prep/fulfilment jobs (not past sales), and sales are REVENUE from customers — never add or confuse these.
 Respond with ONLY the plain-text answer — no markdown headers, no JSON.`;
 
   // Sonnet 5.5 also runs adaptive thinking on by default, and this call
@@ -1691,7 +1707,9 @@ function formatDailyReportEmail(report) {
     `Daily report — ${report.shopName} — ${report.dateStr}`,
     report.isToday
       ? `(as of send time; today's trading may not be fully complete)`
-      : `(labour $ cost is not shown — Tanda only provides live cost for the current day, not past dates)`,
+      : report.labourCost === null
+      ? `(labour $ cost not available for this day)`
+      : null,
     ``,
     `SALES`,
     `  Total net sales: ${money(report.netSales)}${
@@ -1706,7 +1724,7 @@ function formatDailyReportEmail(report) {
     ``,
     `LABOUR`,
     `  Labour hours: ${report.labourHours.toFixed(2)}`,
-    `  Labour cost: ${report.labourCost !== null ? money(report.labourCost) : "n/a (today only)"}`,
+    `  Labour cost: ${report.labourCost !== null ? money(report.labourCost) : "n/a"}`,
     `  Labour %: ${report.labourPct !== null ? report.labourPct.toFixed(1) + "%" : "n/a"}`,
     `  Sales per labour hour: ${report.salesPerLabourHour !== null ? money(report.salesPerLabourHour) : "n/a"}`,
     `  Transactions per labour hour: ${
