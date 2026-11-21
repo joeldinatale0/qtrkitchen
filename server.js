@@ -1485,31 +1485,6 @@ function generateUniquePin() {
   return pin;
 }
 
-// TEMP (remove after use): check whether each shop's Square token is still
-// valid, with one cheap GET per shop (no orders pulled, no email sent).
-app.get("/kitchen/admin/debug-square-health", requireAuth, requireRole("kitchen"), async (req, res) => {
-  const results = {};
-  for (const [slug, config] of Object.entries(SHOP_INTEGRATIONS)) {
-    const token = process.env[config.squareTokenEnvVar];
-    if (!token) {
-      results[slug] = { ok: false, reason: `${config.squareTokenEnvVar} is missing` };
-      continue;
-    }
-    try {
-      const r = await fetch(`https://connect.squareup.com/v2/locations/${config.squareLocationId}`, {
-        headers: { "Square-Version": "2025-01-23", Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      });
-      const body = await r.json();
-      results[slug] = r.ok
-        ? { ok: true, locationName: body.location && body.location.name }
-        : { ok: false, status: r.status, error: body.errors || body };
-    } catch (err) {
-      results[slug] = { ok: false, error: err.message };
-    }
-  }
-  res.json(results);
-});
-
 app.get("/kitchen/admin/staff-pins", requireAuth, requireRole("kitchen"), async (req, res) => {
   let tandaUsers = [];
   let tandaError = null;
