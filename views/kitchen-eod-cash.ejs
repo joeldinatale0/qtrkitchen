@@ -30,6 +30,8 @@
           <th>Cash Sales</th>
           <th>Cash Amount</th>
           <th>Discrepancy</th>
+          <th>Quarter Two Uber</th>
+          <th>Melt Club Uber</th>
           <th>Nights EFTPOS</th>
           <th>Nights Cash</th>
           <th></th>
@@ -50,6 +52,8 @@
               <td data-label="Discrepancy" class="eod-discrepancy <%= s.discrepancy_cents < 0 ? 'short' : s.discrepancy_cents > 0 ? 'over' : 'even' %>">
                 $<%= (s.discrepancy_cents / 100).toFixed(2) %>
               </td>
+              <td data-label="Quarter Two Uber"><%= s.quartertwo_uber_cents !== null ? '$' + (s.quartertwo_uber_cents / 100).toFixed(2) : '—' %></td>
+              <td data-label="Melt Club Uber"><%= s.melt_club_uber_cents !== null ? '$' + (s.melt_club_uber_cents / 100).toFixed(2) : '—' %></td>
               <td data-label="Nights EFTPOS"><%= s.nights_eftpos_cents !== null ? '$' + (s.nights_eftpos_cents / 100).toFixed(2) : '—' %></td>
               <td data-label="Nights Cash"><%= s.nights_cash_cents !== null ? '$' + (s.nights_cash_cents / 100).toFixed(2) : '—' %></td>
               <td data-label="">
@@ -60,7 +64,7 @@
                 </form>
               </td>
             <% } else { %>
-              <td colspan="9" class="muted">Not submitted yet</td>
+              <td colspan="11" class="muted">Not submitted yet</td>
             <% } %>
           </tr>
         <% }) %>

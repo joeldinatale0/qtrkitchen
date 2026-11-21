@@ -322,6 +322,13 @@ ensureColumn("orders", "placed_by", "TEXT");
 // shift — null for every other shop/day.
 ensureColumn("eod_cash_sheets", "nights_eftpos_cents", "INTEGER");
 ensureColumn("eod_cash_sheets", "nights_cash_cents", "INTEGER");
+// Quarter Two runs two separate Uber Eats storefronts out of the same
+// kitchen — its own venue account and the delivery-only "Melt Club" brand
+// — so its generic "Uber Sales" field is split into these two for this
+// shop only; uber_sales_cents still stores their sum for display
+// consistency with every other shop's single Uber column.
+ensureColumn("eod_cash_sheets", "quartertwo_uber_cents", "INTEGER");
+ensureColumn("eod_cash_sheets", "melt_club_uber_cents", "INTEGER");
 
 // The shop account seeded as "QTR Moonee Ponds" now trades as Quarter Two
 // — same account, slug and data, just a new display name.

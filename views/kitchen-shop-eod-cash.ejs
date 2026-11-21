@@ -29,6 +29,8 @@
             <th>Cash Amount</th>
             <th>Discrepancy</th>
             <% if (shop.slug === 'mooneeponds') { %>
+              <th>Quarter Two Uber</th>
+              <th>Melt Club Uber</th>
               <th>Nights EFTPOS</th>
               <th>Nights Cash</th>
             <% } %>
@@ -48,6 +50,8 @@
                 $<%= (s.discrepancy_cents / 100).toFixed(2) %>
               </td>
               <% if (shop.slug === 'mooneeponds') { %>
+                <td data-label="Quarter Two Uber"><%= s.quartertwo_uber_cents !== null ? '$' + (s.quartertwo_uber_cents / 100).toFixed(2) : '—' %></td>
+                <td data-label="Melt Club Uber"><%= s.melt_club_uber_cents !== null ? '$' + (s.melt_club_uber_cents / 100).toFixed(2) : '—' %></td>
                 <td data-label="Nights EFTPOS"><%= s.nights_eftpos_cents !== null ? '$' + (s.nights_eftpos_cents / 100).toFixed(2) : '—' %></td>
                 <td data-label="Nights Cash"><%= s.nights_cash_cents !== null ? '$' + (s.nights_cash_cents / 100).toFixed(2) : '—' %></td>
               <% } %>

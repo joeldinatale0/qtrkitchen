@@ -517,6 +517,13 @@ function buildEodCashReportEmail(shopName, reportDate, sheet, isUpdate, submitte
   if (sheet.nights_eftpos_cents !== null && sheet.nights_eftpos_cents !== undefined) {
     lines.push(``, `  Nights EFTPOS: ${money(sheet.nights_eftpos_cents)}`, `  Nights Cash:   ${money(sheet.nights_cash_cents)}`);
   }
+  if (sheet.quartertwo_uber_cents !== null && sheet.quartertwo_uber_cents !== undefined) {
+    lines.push(
+      ``,
+      `  Quarter Two Uber Sales: ${money(sheet.quartertwo_uber_cents)}`,
+      `  Melt Club Uber Sales:   ${money(sheet.melt_club_uber_cents)}`
+    );
+  }
 
   return {
     subject: `${isUpdate ? "UPDATED " : ""}EOD Cash Report — ${shopName} — ${reportDate}`,
@@ -607,6 +614,13 @@ function isFriOrSat(isoDate) {
 // EFTPOS/cash figure for the night shift on those two days only.
 function showsNightsFields(shopSlug, reportDate) {
   return shopSlug === "mooneeponds" && isFriOrSat(reportDate);
+}
+
+// Quarter Two tracks Uber Eats sales split by storefront (its own venue
+// account vs the "Melt Club" delivery-only brand) instead of one generic
+// Uber Sales figure — every day, not just Fri/Sat.
+function showsSplitUberFields(shopSlug) {
+  return shopSlug === "mooneeponds";
 }
 
 function effectivePar(parRow, isoDate) {
@@ -800,6 +814,7 @@ app.get("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     recent,
     saved: req.query.saved === "1",
     showNights: showsNightsFields(shopSlug, reportDate),
+    showSplitUber: showsSplitUberFields(shopSlug),
   });
 });
 
@@ -811,7 +826,6 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
   const toCents = (v) => Math.round((Number(v) || 0) * 100);
   const tillAmountCents = toCents(req.body.till_amount);
   const eftposSalesCents = toCents(req.body.eftpos_sales);
-  const uberSalesCents = toCents(req.body.uber_sales);
   const cashSalesCents = toCents(req.body.cash_sales);
   // Cash Amount is entered directly by the team for now rather than
   // auto-calculated from till amount minus float — that is planned for
@@ -820,6 +834,17 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
   const nightsApply = showsNightsFields(shopSlug, reportDate);
   const nightsEftposCents = nightsApply ? toCents(req.body.nights_eftpos) : null;
   const nightsCashCents = nightsApply ? toCents(req.body.nights_cash) : null;
+
+  // Quarter Two enters Uber sales split by storefront (its own venue vs
+  // the Melt Club delivery-only brand) instead of one generic figure —
+  // uber_sales_cents still stores their sum so every other shop's single
+  // "Uber" column stays meaningful.
+  const splitUberApplies = showsSplitUberFields(shopSlug);
+  const quarterTwoUberCents = splitUberApplies ? toCents(req.body.quartertwo_uber) : null;
+  const meltClubUberCents = splitUberApplies ? toCents(req.body.melt_club_uber) : null;
+  const uberSalesCents = splitUberApplies
+    ? (quarterTwoUberCents || 0) + (meltClubUberCents || 0)
+    : toCents(req.body.uber_sales);
 
   const floatSetting = db.prepare("SELECT float_cents FROM shop_float_settings WHERE shop_slug = ?").get(shopSlug);
   const floatCents = floatSetting ? floatSetting.float_cents : 50000;
@@ -832,8 +857,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
 
   db.prepare(
     `INSERT INTO eod_cash_sheets
-       (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, nights_eftpos_cents, nights_cash_cents, submitted_by, submitted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       (shop_slug, report_date, till_amount_cents, eftpos_sales_cents, uber_sales_cents, cash_sales_cents, float_cents, cash_amount_cents, discrepancy_cents, nights_eftpos_cents, nights_cash_cents, quartertwo_uber_cents, melt_club_uber_cents, submitted_by, submitted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(shop_slug, report_date) DO UPDATE SET
        till_amount_cents = excluded.till_amount_cents,
        eftpos_sales_cents = excluded.eftpos_sales_cents,
@@ -844,6 +869,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
        discrepancy_cents = excluded.discrepancy_cents,
        nights_eftpos_cents = excluded.nights_eftpos_cents,
        nights_cash_cents = excluded.nights_cash_cents,
+       quartertwo_uber_cents = excluded.quartertwo_uber_cents,
+       melt_club_uber_cents = excluded.melt_club_uber_cents,
        submitted_by = excluded.submitted_by,
        submitted_at = CURRENT_TIMESTAMP`
   ).run(
@@ -858,6 +885,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
     discrepancyCents,
     nightsEftposCents,
     nightsCashCents,
+    quarterTwoUberCents,
+    meltClubUberCents,
     req.session.staffMember.name
   );
 
@@ -875,6 +904,8 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
         discrepancy_cents: discrepancyCents,
         nights_eftpos_cents: nightsEftposCents,
         nights_cash_cents: nightsCashCents,
+        quartertwo_uber_cents: quarterTwoUberCents,
+        melt_club_uber_cents: meltClubUberCents,
       },
       isUpdate,
       req.session.staffMember.name
