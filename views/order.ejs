@@ -2,8 +2,8 @@
 <%- include('partials/topbar') %>
 
 <div class="container">
-  <p class="muted"><a href="<%= area === 'paper' ? '/order/paper-goods/select-date' : '/order/select-date' %>">&larr; Change delivery date</a></p>
-  <h1><%= area === 'paper' ? 'Paper Goods order' : 'Order' %> for <%= formatDate(deliveryDate) %></h1>
+  <p class="muted"><a href="<%= area === 'paper' ? '/order/paper-goods/select-date' : area === 'cans' ? '/order/grab-n-go/select-date' : '/order/select-date' %>">&larr; Change delivery date</a></p>
+  <h1><%= area === 'paper' ? 'Paper Goods order' : area === 'cans' ? 'Grab n Go order' : 'Order' %> for <%= formatDate(deliveryDate) %></h1>
   <p class="subtitle">
     Enter quantities for what you need delivered that morning. Orders for the next day are due by
     <%= cutoffHour %>:00 (2:00 PM) — the kitchen preps overnight. You can resubmit any time before then to update your order.
@@ -17,7 +17,7 @@
     <div class="success-banner">You already have an order saved for this date — submitting again will update it.</div>
   <% } %>
 
-  <form method="POST" action="<%= area === 'paper' ? '/order/paper-goods' : '/order' %>">
+  <form method="POST" action="<%= area === 'paper' ? '/order/paper-goods' : area === 'cans' ? '/order/grab-n-go' : '/order' %>">
     <input type="hidden" name="delivery_date" value="<%= deliveryDate %>" />
     <% categories.forEach(function(cat) { %>
       <h2><%= cat.name %></h2>

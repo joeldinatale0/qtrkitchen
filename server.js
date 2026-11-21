@@ -205,12 +205,19 @@ async function sendDailyBackupIfDue() {
 
 // Shared by the Monday auto-email and the on-demand admin PDF view.
 // category: undefined/null = everything (the real combined invoice that
-// actually gets emailed/logged); "food" = everything except Paper Goods;
-// "paper" = Paper Goods only. The two filtered forms are admin-viewing-only
-// breakdowns — they don't change what's actually invoiced/emailed weekly.
+// actually gets emailed/logged); "food" = everything except Paper Goods and
+// Grab n Go; "paper" = Paper Goods only; "cans" = Grab n Go only. The
+// filtered forms are admin-viewing-only breakdowns — they don't change what's
+// actually invoiced/emailed weekly.
 function buildWeeklyInvoiceData(shopId, weekStart, weekEnd, category) {
   const categoryClause =
-    category === "food" ? "AND c.slug != 'paper'" : category === "paper" ? "AND c.slug = 'paper'" : "";
+    category === "food"
+      ? "AND c.slug != 'paper' AND c.slug != 'cans'"
+      : category === "paper"
+      ? "AND c.slug = 'paper'"
+      : category === "cans"
+      ? "AND c.slug = 'cans'"
+      : "";
   const dailyRows = db
     .prepare(
       `SELECT o.delivery_date, oi.name, oi.unit, SUM(oi.quantity) AS quantity, MAX(i.price) AS price
@@ -273,8 +280,8 @@ async function sendWeeklySummaryIfDue() {
     if (already) continue;
 
     try {
-      // Two separate invoices per shop — Food and Paper Goods are
-      // different cost categories, so Joel files/reconciles them
+      // Three separate invoices per shop — Food, Paper Goods, and Grab n Go
+      // are different cost categories, so Joel files/reconciles them
       // separately. Skip attaching a category's PDF for a week it had
       // zero items in, rather than sending an empty invoice every week.
       const attachments = [];
@@ -307,6 +314,22 @@ async function sendWeeklySummaryIfDue() {
           content: paperPdf.toString("base64"),
         });
         sections.push("Paper Goods");
+      }
+
+      const cans = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "cans");
+      if (cans.weeklyTotals.length > 0) {
+        const cansPdf = await buildWeeklySummaryPdf(
+          { ...shop, name: `${shop.name} (Grab n Go)` },
+          formatDate(weekStart),
+          formatDate(weekEnd),
+          cans.dailyBreakdown,
+          cans.weeklyTotals
+        );
+        attachments.push({
+          filename: `weekly-invoice-grab-n-go-${shop.slug}-${weekStart}.pdf`,
+          content: cansPdf.toString("base64"),
+        });
+        sections.push("Grab n Go");
       }
 
       if (attachments.length > 0) {
@@ -1027,7 +1050,7 @@ app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
   if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
 
   const categories = db
-    .prepare("SELECT * FROM categories WHERE is_custom = 0 AND slug != 'paper' ORDER BY sort_order")
+    .prepare("SELECT * FROM categories WHERE is_custom = 0 AND slug != 'paper' AND slug != 'cans' ORDER BY sort_order")
     .all();
   const items = db
     .prepare(
@@ -1089,14 +1112,15 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   const shopId = req.session.user.id;
   const isLate = deliveryDate === tomorrow() && isLateSubmission();
 
-  // Paper Goods is its own separate ordering area (see /order/paper-goods)
-  // sharing the same orders/order_items tables keyed by delivery date — so
-  // this must only ever touch food-category items, never delete a paper
-  // goods line that was already submitted for the same date.
+  // Paper Goods and Grab n Go are their own separate ordering areas (see
+  // /order/paper-goods and /order/grab-n-go) sharing the same
+  // orders/order_items tables keyed by delivery date — so this must only
+  // ever touch food-category items, never delete a paper goods or grab n go
+  // line that was already submitted for the same date.
   const items = db
     .prepare(
       `SELECT i.* FROM items i JOIN categories c ON c.id = i.category_id
-       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug != 'paper'`
+       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug != 'paper' AND c.slug != 'cans'`
     )
     .all(shopId);
   const parRows = db
@@ -1112,7 +1136,7 @@ app.post("/order", requireAuth, requireRole("shop"), (req, res) => {
   if (order) {
     db.prepare(
       `DELETE FROM order_items WHERE order_id = ? AND (item_id IS NULL OR item_id IN (
-         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper' AND c.slug != 'cans'
        ))`
     ).run(order.id);
     db.prepare(
@@ -1195,7 +1219,7 @@ app.get("/order/complete", requireAuth, requireRole("shop"), (req, res) => {
   const orderItems = db
     .prepare(
       `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND (oi.item_id IS NULL OR oi.item_id IN (
-         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper' AND c.slug != 'cans'
        )) ORDER BY oi.id`
     )
     .all(order.id);
@@ -1354,6 +1378,157 @@ app.get("/order/paper-goods/complete", requireAuth, requireRole("shop"), (req, r
   res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late, area: "paper" });
 });
 
+// ---------- Shop: Grab n Go — its own ordering area, not part of Food Order ----------
+// Shares the same orders/order_items tables as food (keyed by shop_id +
+// delivery_date), scoped strictly to the 'cans' category on every read,
+// write and delete so this area never touches Food's or Paper Goods' lines.
+
+app.get("/order/grab-n-go/select-date", requireAuth, requireRole("shop"), (req, res) => {
+  const upcoming = db
+    .prepare(
+      `SELECT delivery_date, is_late, status FROM orders
+       WHERE shop_id = ? AND delivery_date >= ?
+       ORDER BY delivery_date ASC`
+    )
+    .all(req.session.user.id, tomorrow());
+
+  res.render("order-select-date", { minDate: tomorrow(), upcoming, area: "cans" });
+});
+
+app.get("/order/grab-n-go", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.query.date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/grab-n-go/select-date");
+
+  const categories = db.prepare("SELECT * FROM categories WHERE slug = 'cans' ORDER BY sort_order").all();
+  const items = db
+    .prepare("SELECT * FROM items WHERE active = 1 AND (shop_id IS NULL OR shop_id = ?) ORDER BY sort_order")
+    .all(req.session.user.id);
+
+  const existingOrder = db
+    .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+    .get(req.session.user.id, deliveryDate);
+
+  const parRows = db
+    .prepare("SELECT item_id, par_level, par_level_weekend FROM shop_item_pars WHERE shop_id = ?")
+    .all(req.session.user.id);
+  const parByItemId = {};
+  parRows.forEach((p) => (parByItemId[p.item_id] = effectivePar(p, deliveryDate)));
+
+  const existingQuantities = {};
+  const existingStock = {};
+  if (existingOrder) {
+    const orderItems = db.prepare("SELECT * FROM order_items WHERE order_id = ?").all(existingOrder.id);
+    for (const oi of orderItems) {
+      if (oi.item_id) {
+        existingQuantities[oi.item_id] = oi.quantity;
+        if (oi.current_stock !== null) existingStock[oi.item_id] = oi.current_stock;
+      }
+    }
+  }
+
+  categories.forEach((cat) => {
+    cat.items = items.filter((i) => i.category_id === cat.id);
+  });
+
+  const submitted = categories.some((cat) => cat.items.some((i) => existingQuantities[i.id] !== undefined));
+  const isLateNow = deliveryDate === tomorrow() && isLateSubmission();
+
+  res.render("order", {
+    deliveryDate,
+    categories,
+    parByItemId,
+    existingQuantities,
+    existingStock,
+    existingCustomNotes: "",
+    submitted,
+    isLateNow,
+    cutoffHour: ORDER_CUTOFF_HOUR,
+    area: "cans",
+  });
+});
+
+app.post("/order/grab-n-go", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.body.delivery_date;
+  if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/grab-n-go/select-date");
+
+  const shopId = req.session.user.id;
+  const isLate = deliveryDate === tomorrow() && isLateSubmission();
+
+  const items = db
+    .prepare(
+      `SELECT i.* FROM items i JOIN categories c ON c.id = i.category_id
+       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug = 'cans'`
+    )
+    .all(shopId);
+  const parRows = db.prepare("SELECT item_id FROM shop_item_pars WHERE shop_id = ?").all(shopId);
+  const parItemIds = new Set(parRows.map((p) => p.item_id));
+
+  let order = db.prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?").get(shopId, deliveryDate);
+  const isEdit = !!order;
+
+  if (order) {
+    db.prepare(
+      `DELETE FROM order_items WHERE order_id = ? AND item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'cans'
+       )`
+    ).run(order.id);
+    db.prepare("UPDATE orders SET updated_at = CURRENT_TIMESTAMP, is_late = ?, placed_by = ? WHERE id = ?").run(
+      isLate ? 1 : 0,
+      req.session.staffMember.name,
+      order.id
+    );
+  } else {
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO orders (shop_id, delivery_date, is_late, placed_by) VALUES (?, ?, ?, ?)")
+      .run(shopId, deliveryDate, isLate ? 1 : 0, req.session.staffMember.name);
+    order = { id: lastInsertRowid };
+  }
+
+  const insertOrderItem = db.prepare(
+    "INSERT INTO order_items (order_id, item_id, name, unit, quantity, current_stock, note) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+
+  const orderedItems = [];
+  for (const item of items) {
+    const raw = req.body[`item_${item.id}`];
+    const qty = parseFloat(raw);
+    let stock = null;
+    if (parItemIds.has(item.id)) {
+      const rawStock = req.body[`stock_${item.id}`];
+      if (rawStock !== undefined && rawStock !== "") stock = parseInt(rawStock, 10);
+    }
+    if (qty && qty > 0) {
+      insertOrderItem.run(order.id, item.id, item.name, item.unit, qty, stock, null);
+      orderedItems.push({ name: item.name, unit: item.unit, quantity: qty, kitchenSection: item.kitchen_section });
+    }
+  }
+
+  sendOrderEmail(req.session.user, formatDate(deliveryDate), orderedItems, [], isLate, isEdit, "Grab n Go", req.session.staffMember.name);
+
+  res.redirect(`/order/grab-n-go/complete?date=${deliveryDate}`);
+});
+
+app.get("/order/grab-n-go/complete", requireAuth, requireRole("shop"), (req, res) => {
+  const deliveryDate = req.query.date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate || "")) return res.redirect("/order/grab-n-go/select-date");
+
+  const order = db
+    .prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?")
+    .get(req.session.user.id, deliveryDate);
+
+  if (!order) return res.redirect("/order/grab-n-go/select-date");
+
+  const orderItems = db
+    .prepare(
+      `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND oi.item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'cans'
+       ) ORDER BY oi.id`
+    )
+    .all(order.id);
+
+  res.render("order-complete", { deliveryDate, orderItems, isLate: !!order.is_late, area: "cans" });
+});
+
 // ---------- Kitchen: dashboard ----------
 
 // Admin hub: pick a shop to drill into, or jump to today's combined prep list.
@@ -1378,12 +1553,15 @@ app.get("/kitchen/shop/:slug", requireAuth, requireRole("kitchen"), (req, res) =
 // (see POST /order and POST /order/paper-goods), so the admin orders view
 // is split by category here rather than by a different data source.
 function renderShopOrders(category) {
-  const categoryLabel = category === "paper" ? "Paper Goods Orders" : "Food Orders";
-  const basePath = category === "paper" ? "orders/paper-goods" : "orders";
+  const categoryLabel =
+    category === "paper" ? "Paper Goods Orders" : category === "cans" ? "Grab n Go Orders" : "Food Orders";
+  const basePath = category === "paper" ? "orders/paper-goods" : category === "cans" ? "orders/grab-n-go" : "orders";
   const datesItemsClause =
     category === "paper"
       ? "oi.item_id IS NOT NULL AND c.slug = 'paper'"
-      : "(oi.item_id IS NULL OR c.slug != 'paper')";
+      : category === "cans"
+      ? "oi.item_id IS NOT NULL AND c.slug = 'cans'"
+      : "(oi.item_id IS NULL OR (c.slug != 'paper' AND c.slug != 'cans'))";
 
   return (req, res) => {
     const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
@@ -1436,6 +1614,7 @@ function renderShopOrders(category) {
 
 app.get("/kitchen/shop/:slug/orders", requireAuth, requireRole("kitchen"), renderShopOrders("food"));
 app.get("/kitchen/shop/:slug/orders/paper-goods", requireAuth, requireRole("kitchen"), renderShopOrders("paper"));
+app.get("/kitchen/shop/:slug/orders/grab-n-go", requireAuth, requireRole("kitchen"), renderShopOrders("cans"));
 
 app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (req, res) => {
   const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
@@ -1476,8 +1655,13 @@ app.get("/kitchen/shop/:slug/stock-checks", requireAuth, requireRole("kitchen"),
 // breakdown of that same week on demand — these PDFs are generated fresh,
 // not stored separately.
 function renderShopInvoices(category) {
-  const categoryLabel = category === "paper" ? "Paper Goods Order Invoices" : "Food Order Invoices";
-  const basePath = category === "paper" ? "invoices/paper-goods" : "invoices";
+  const categoryLabel =
+    category === "paper"
+      ? "Paper Goods Order Invoices"
+      : category === "cans"
+      ? "Grab n Go Order Invoices"
+      : "Food Order Invoices";
+  const basePath = category === "paper" ? "invoices/paper-goods" : category === "cans" ? "invoices/grab-n-go" : "invoices";
 
   return (req, res) => {
     const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
@@ -1505,7 +1689,12 @@ function renderInvoicePdf(category) {
       const weekStart = req.params.weekStart;
       const weekEnd = addDays(weekStart, 6);
       const { dailyBreakdown, weeklyTotals } = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, category);
-      const pdfShop = category === "paper" ? { ...shop, name: `${shop.name} (Paper Goods)` } : shop;
+      const pdfShop =
+        category === "paper"
+          ? { ...shop, name: `${shop.name} (Paper Goods)` }
+          : category === "cans"
+          ? { ...shop, name: `${shop.name} (Grab n Go)` }
+          : shop;
       const pdfBuffer = await buildWeeklySummaryPdf(
         pdfShop,
         formatDate(weekStart),
@@ -1513,7 +1702,8 @@ function renderInvoicePdf(category) {
         dailyBreakdown,
         weeklyTotals
       );
-      const filenamePrefix = category === "paper" ? "weekly-invoice-paper-goods" : "weekly-invoice";
+      const filenamePrefix =
+        category === "paper" ? "weekly-invoice-paper-goods" : category === "cans" ? "weekly-invoice-grab-n-go" : "weekly-invoice";
       res.set("Content-Type", "application/pdf");
       res.set("Content-Disposition", `inline; filename="${filenamePrefix}-${shop.slug}-${weekStart}.pdf"`);
       res.send(pdfBuffer);
@@ -1525,12 +1715,19 @@ function renderInvoicePdf(category) {
 
 app.get("/kitchen/shop/:slug/invoices", requireAuth, requireRole("kitchen"), renderShopInvoices("food"));
 app.get("/kitchen/shop/:slug/invoices/paper-goods", requireAuth, requireRole("kitchen"), renderShopInvoices("paper"));
+app.get("/kitchen/shop/:slug/invoices/grab-n-go", requireAuth, requireRole("kitchen"), renderShopInvoices("cans"));
 app.get("/kitchen/shop/:slug/invoices/:weekStart.pdf", requireAuth, requireRole("kitchen"), renderInvoicePdf("food"));
 app.get(
   "/kitchen/shop/:slug/invoices/paper-goods/:weekStart.pdf",
   requireAuth,
   requireRole("kitchen"),
   renderInvoicePdf("paper")
+);
+app.get(
+  "/kitchen/shop/:slug/invoices/grab-n-go/:weekStart.pdf",
+  requireAuth,
+  requireRole("kitchen"),
+  renderInvoicePdf("cans")
 );
 
 // Rebuilds and re-emails an already-sent weekly invoice — e.g. after
@@ -1570,6 +1767,22 @@ app.post("/kitchen/shop/:slug/invoices/:weekStart/resend", requireAuth, requireR
         content: paperPdf.toString("base64"),
       });
       sections.push("Paper Goods");
+    }
+
+    const cans = buildWeeklyInvoiceData(shop.id, weekStart, weekEnd, "cans");
+    if (cans.weeklyTotals.length > 0) {
+      const cansPdf = await buildWeeklySummaryPdf(
+        { ...shop, name: `${shop.name} (Grab n Go)` },
+        formatDate(weekStart),
+        formatDate(weekEnd),
+        cans.dailyBreakdown,
+        cans.weeklyTotals
+      );
+      attachments.push({
+        filename: `weekly-invoice-grab-n-go-${shop.slug}-${weekStart}.pdf`,
+        content: cansPdf.toString("base64"),
+      });
+      sections.push("Grab n Go");
     }
 
     const to = (req.body && req.body.to) || DAILY_REPORT_EMAIL_TO;
@@ -1723,15 +1936,15 @@ app.get("/kitchen/today", requireAuth, requireRole("kitchen"), (req, res) => {
     .prepare("SELECT * FROM orders WHERE delivery_date = ?")
     .all(deliveryDate);
 
-  // Paper Goods is a separate ordering area, not something the kitchen
-  // preps — excluded from this food prep list the same way everywhere else
-  // keeps the two areas apart.
+  // Paper Goods and Grab n Go are separate ordering areas, not something the
+  // kitchen preps/bakes — excluded from this food prep list the same way
+  // everywhere else keeps the three areas apart.
   const ordersByShopId = {};
   for (const order of orders) {
     const orderItems = db
       .prepare(
         `SELECT oi.* FROM order_items oi WHERE oi.order_id = ? AND (oi.item_id IS NULL OR oi.item_id IN (
-           SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper'
+           SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug != 'paper' AND c.slug != 'cans'
          )) ORDER BY oi.id`
       )
       .all(order.id);
@@ -1879,6 +2092,20 @@ app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req,
     );
   }
   res.redirect("/kitchen/items?saved=1");
+});
+
+app.get("/kitchen/admin/debug-fix-granola-category", requireAuth, requireRole("kitchen"), (req, res) => {
+  const cansCategory = db.prepare("SELECT id FROM categories WHERE slug = 'cans'").get();
+  const before = db.prepare("SELECT id, name, category_id FROM items WHERE id = 45").get();
+  if (!cansCategory || !before) {
+    return res.json({ error: "not found", cansCategory, before });
+  }
+  if (req.query.dryrun === "1") {
+    return res.json({ dryrun: true, before, targetCategoryId: cansCategory.id });
+  }
+  db.prepare("UPDATE items SET category_id = ? WHERE id = 45").run(cansCategory.id);
+  const after = db.prepare("SELECT id, name, category_id FROM items WHERE id = 45").get();
+  res.json({ before, after });
 });
 
 app.post("/kitchen/items/:id/toggle", requireAuth, requireRole("kitchen"), (req, res) => {
