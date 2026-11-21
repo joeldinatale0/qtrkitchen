@@ -918,6 +918,123 @@ app.post("/eod-cash", requireAuth, requireRole("shop"), (req, res) => {
   res.redirect(`/eod-cash?date=${reportDate}&saved=1`);
 });
 
+// ---------- Shop: daily stock checklist ----------
+// Standalone from actually placing a food order — staff count what's on
+// hand for every item that has a par level, and a suggested order
+// quantity (par minus stock, floored at 0) is shown back to them the
+// instant they submit, as well as stored as its own daily record.
+
+app.get("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
+  const checkDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "") ? req.query.date : melbourneDateString();
+  const shopId = req.session.user.id;
+
+  const parRows = db
+    .prepare(
+      `SELECT sip.item_id, sip.par_level, sip.par_level_weekend, i.name, i.unit, i.sort_order
+       FROM shop_item_pars sip JOIN items i ON i.id = sip.item_id
+       WHERE sip.shop_id = ? AND i.active = 1
+       ORDER BY i.sort_order`
+    )
+    .all(shopId);
+  const parItems = parRows.map((r) => ({
+    itemId: r.item_id,
+    name: r.name,
+    unit: r.unit,
+    par: effectivePar(r, checkDate),
+  }));
+
+  const existing = db
+    .prepare("SELECT * FROM stock_checks WHERE shop_slug = ? AND check_date = ?")
+    .get(req.session.user.slug, checkDate);
+  let existingStock = {};
+  let generated = null;
+  if (existing) {
+    const rows = db.prepare("SELECT * FROM stock_check_items WHERE stock_check_id = ? ORDER BY id").all(existing.id);
+    rows.forEach((r) => (existingStock[r.item_id] = r.current_stock));
+    if (req.query.saved === "1") generated = rows;
+  }
+
+  const recent = db
+    .prepare("SELECT * FROM stock_checks WHERE shop_slug = ? ORDER BY check_date DESC LIMIT 14")
+    .all(req.session.user.slug);
+
+  res.render("stock-check", {
+    checkDate,
+    today: melbourneDateString(),
+    parItems,
+    existingStock,
+    existing,
+    generated,
+    recent,
+  });
+});
+
+app.post("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
+  const checkDate = req.body.check_date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(checkDate || "")) return res.redirect("/stock-check");
+  const shopId = req.session.user.id;
+  const shopSlug = req.session.user.slug;
+
+  const parRows = db
+    .prepare(
+      `SELECT sip.item_id, sip.par_level, sip.par_level_weekend, i.name, i.unit
+       FROM shop_item_pars sip JOIN items i ON i.id = sip.item_id
+       WHERE sip.shop_id = ? AND i.active = 1`
+    )
+    .all(shopId);
+
+  const rows = parRows.map((r) => {
+    const par = effectivePar(r, checkDate);
+    const raw = req.body[`stock_${r.item_id}`];
+    const stock = raw !== undefined && raw !== "" ? parseInt(raw, 10) : null;
+    const suggested = stock !== null ? Math.max(par - stock, 0) : null;
+    return { itemId: r.item_id, name: r.name, unit: r.unit, par, stock, suggested };
+  });
+
+  const { lastInsertRowid: stockCheckId } = (() => {
+    const existing = db.prepare("SELECT id FROM stock_checks WHERE shop_slug = ? AND check_date = ?").get(shopSlug, checkDate);
+    if (existing) {
+      db.prepare("UPDATE stock_checks SET submitted_by = ?, submitted_at = CURRENT_TIMESTAMP WHERE id = ?").run(
+        req.session.staffMember.name,
+        existing.id
+      );
+      db.prepare("DELETE FROM stock_check_items WHERE stock_check_id = ?").run(existing.id);
+      return { lastInsertRowid: existing.id };
+    }
+    return db
+      .prepare("INSERT INTO stock_checks (shop_slug, check_date, submitted_by) VALUES (?, ?, ?)")
+      .run(shopSlug, checkDate, req.session.staffMember.name);
+  })();
+
+  const insertItem = db.prepare(
+    "INSERT INTO stock_check_items (stock_check_id, item_id, name, unit, par_level, current_stock, suggested_qty) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+  for (const r of rows) {
+    insertItem.run(stockCheckId, r.itemId, r.name, r.unit, r.par, r.stock, r.suggested);
+  }
+
+  if (process.env.GMAIL_APP_PASSWORD) {
+    const lines = [
+      `Stock check — ${req.session.user.name} — ${checkDate}`,
+      `Submitted by: ${req.session.staffMember.name}`,
+      ``,
+      ...rows.map(
+        (r) =>
+          `  ${r.name} (${r.unit}) — par ${r.par}, have ${r.stock !== null ? r.stock : "?"} -> suggested order: ${
+            r.suggested !== null ? r.suggested : "n/a"
+          }`
+      ),
+    ];
+    sendEmail({
+      to: EMAIL_TO,
+      subject: `Stock check — ${req.session.user.name} — ${checkDate}`,
+      text: lines.join("\n"),
+    }).catch((err) => console.error("Stock check email failed:", err.message));
+  }
+
+  res.redirect(`/stock-check?date=${checkDate}&saved=1`);
+});
+
 app.get("/order", requireAuth, requireRole("shop"), (req, res) => {
   const deliveryDate = req.query.date;
   if (!isValidFutureDate(deliveryDate)) return res.redirect("/order/select-date");
@@ -1342,6 +1459,28 @@ app.get("/kitchen/shop/:slug/eod-cash", requireAuth, requireRole("kitchen"), (re
     .all(shop.slug);
 
   res.render("kitchen-shop-eod-cash", { shop, sheets });
+});
+
+app.get("/kitchen/shop/:slug/stock-checks", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.params.slug);
+  if (!shop) return res.status(404).send("Shop not found");
+
+  const checks = db
+    .prepare("SELECT * FROM stock_checks WHERE shop_slug = ? ORDER BY check_date DESC")
+    .all(shop.slug);
+
+  let selected = null;
+  if (req.query.date) {
+    const check = checks.find((c) => c.check_date === req.query.date);
+    if (check) {
+      const items = db
+        .prepare("SELECT * FROM stock_check_items WHERE stock_check_id = ? ORDER BY id")
+        .all(check.id);
+      selected = { check, items };
+    }
+  }
+
+  res.render("kitchen-shop-stock-checks", { shop, checks, selected, selectedDate: req.query.date || null });
 });
 
 // Same split as orders above: one real combined invoice is actually

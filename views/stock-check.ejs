@@ -1,0 +1,117 @@
+<%- include('partials/head', { title: "Stock Check — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Daily Stock Check</h1>
+  <p class="subtitle">
+    Count what you've physically got on hand for each item below, then submit — you'll get a suggested order
+    quantity (par minus stock) straight away.
+  </p>
+
+  <form method="GET" action="/stock-check" class="eod-meta" style="margin-bottom: 20px;">
+    <div>
+      <label for="date">Date</label>
+      <input type="date" id="date" name="date" value="<%= checkDate %>" max="<%= today %>" onchange="this.form.submit()" />
+    </div>
+  </form>
+
+  <% if (generated) { %>
+    <div class="success-banner" style="margin-bottom: 20px;">Stock check saved for <%= formatDate(checkDate) %>.</div>
+    <div class="card" style="margin-bottom: 30px;">
+      <p class="item-name" style="margin-bottom: 8px;">Generated stocklist</p>
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Par</th><th>In Stock</th><th>Suggested Order</th></tr>
+        </thead>
+        <tbody>
+          <% generated.forEach(function(r) { %>
+            <tr>
+              <td><%= r.name %> <span class="item-unit">/ <%= r.unit %></span></td>
+              <td><%= r.par_level %></td>
+              <td><%= r.current_stock !== null ? r.current_stock : '—' %></td>
+              <td><strong><%= r.suggested_qty !== null ? r.suggested_qty : '—' %></strong></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+
+  <% if (parItems.length === 0) { %>
+    <p class="muted">No items have a par level set for this shop yet — ask Joel to set some under Par Levels.</p>
+  <% } else { %>
+    <form method="POST" action="/stock-check">
+      <input type="hidden" name="check_date" value="<%= checkDate %>" />
+      <div class="card">
+        <table>
+          <thead>
+            <tr><th>Item</th><th>Par</th><th>In Stock</th><th>Suggested Order</th></tr>
+          </thead>
+          <tbody>
+            <% parItems.forEach(function(item) { %>
+              <tr>
+                <td><%= item.name %> <span class="item-unit">/ <%= item.unit %></span></td>
+                <td><%= item.par %></td>
+                <td>
+                  <input
+                    type="number"
+                    name="stock_<%= item.itemId %>"
+                    class="stock-input"
+                    data-par="<%= item.par %>"
+                    min="0"
+                    step="1"
+                    style="width: 80px;"
+                    value="<%= existingStock[item.itemId] !== undefined ? existingStock[item.itemId] : '' %>"
+                    placeholder="0"
+                  />
+                </td>
+                <td><input type="text" class="suggested-preview" readonly value="" tabindex="-1" style="width: 60px;" /></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+      <button class="btn btn-filled" type="submit" style="margin-top: 16px;">
+        <%= existing ? 'Update' : 'Submit' %> Stock Check
+      </button>
+    </form>
+  <% } %>
+
+  <% if (recent.length > 0) { %>
+    <h2 style="margin-top: 40px;">Recent Stock Checks</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Submitted By</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% recent.forEach(function(s) { %>
+            <tr>
+              <td><%= formatDate(s.check_date) %></td>
+              <td><%= s.submitted_by || '—' %></td>
+              <td><a class="btn btn-small" href="/stock-check?date=<%= s.check_date %>">View / Edit</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</div>
+
+<script>
+  document.querySelectorAll('.stock-input').forEach(function (stockInput) {
+    var par = parseInt(stockInput.dataset.par, 10);
+    var suggestedPreview = stockInput.closest('tr').querySelector('.suggested-preview');
+
+    function update() {
+      var stock = parseInt(stockInput.value, 10);
+      suggestedPreview.value = isNaN(stock) ? '' : Math.max(par - stock, 0);
+    }
+
+    stockInput.addEventListener('input', update);
+    update();
+  });
+</script>
+
+</body>
+</html>

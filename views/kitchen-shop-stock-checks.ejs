@@ -1,0 +1,55 @@
+<%- include('partials/head', { title: shop.name + " Stock Checks — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/shop/<%= shop.slug %>">&larr; <%= shop.name %></a></p>
+  <h1><%= shop.name %> — Daily Stock Checklists</h1>
+  <p class="subtitle">Every stock check this shop has submitted, most recent first.</p>
+
+  <% if (selected) { %>
+    <h2>Stock check for <%= formatDate(selectedDate) %></h2>
+    <div class="card">
+      <p class="muted" style="margin-top: 0;">Submitted by: <%= selected.check.submitted_by || 'unknown' %></p>
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Par</th><th>In Stock</th><th>Suggested Order</th></tr>
+        </thead>
+        <tbody>
+          <% selected.items.forEach(function(i) { %>
+            <tr>
+              <td><%= i.name %> <span class="item-unit">/ <%= i.unit %></span></td>
+              <td><%= i.par_level !== null ? i.par_level : '—' %></td>
+              <td><%= i.current_stock !== null ? i.current_stock : '—' %></td>
+              <td><strong><%= i.suggested_qty !== null ? i.suggested_qty : '—' %></strong></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+
+  <h2 style="margin-top: 40px;">All Stock Checks</h2>
+  <div class="card">
+    <% if (checks.length === 0) { %>
+      <p class="muted">No stock checks submitted yet.</p>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Submitted By</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% checks.forEach(function(c) { %>
+            <tr>
+              <td><%= formatDate(c.check_date) %></td>
+              <td><%= c.submitted_by || '—' %></td>
+              <td><a class="btn btn-small" href="/kitchen/shop/<%= shop.slug %>/stock-checks?date=<%= c.check_date %>">View</a></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+</div>
+
+</body>
+</html>

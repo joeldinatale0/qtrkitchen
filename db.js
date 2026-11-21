@@ -267,6 +267,30 @@ db.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- One daily stock check per shop per day: staff count what's physically
+  -- on hand for every item that has a par level, and a suggested order
+  -- quantity (par minus stock, floored at 0) is generated immediately —
+  -- a standalone checklist, independent of actually placing a food order.
+  CREATE TABLE IF NOT EXISTS stock_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_slug TEXT NOT NULL,
+    check_date TEXT NOT NULL,
+    submitted_by TEXT,
+    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(shop_slug, check_date)
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_check_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_check_id INTEGER NOT NULL REFERENCES stock_checks(id) ON DELETE CASCADE,
+    item_id INTEGER REFERENCES items(id),
+    name TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT 'ea',
+    par_level INTEGER,
+    current_stock INTEGER,
+    suggested_qty INTEGER
+  );
 `);
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from
