@@ -2094,20 +2094,6 @@ app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req,
   res.redirect("/kitchen/items?saved=1");
 });
 
-app.get("/kitchen/admin/debug-fix-granola-category", requireAuth, requireRole("kitchen"), (req, res) => {
-  const cansCategory = db.prepare("SELECT id FROM categories WHERE slug = 'cans'").get();
-  const before = db.prepare("SELECT id, name, category_id FROM items WHERE id = 45").get();
-  if (!cansCategory || !before) {
-    return res.json({ error: "not found", cansCategory, before });
-  }
-  if (req.query.dryrun === "1") {
-    return res.json({ dryrun: true, before, targetCategoryId: cansCategory.id });
-  }
-  db.prepare("UPDATE items SET category_id = ? WHERE id = 45").run(cansCategory.id);
-  const after = db.prepare("SELECT id, name, category_id FROM items WHERE id = 45").get();
-  res.json({ before, after });
-});
-
 app.post("/kitchen/items/:id/toggle", requireAuth, requireRole("kitchen"), (req, res) => {
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item) {
