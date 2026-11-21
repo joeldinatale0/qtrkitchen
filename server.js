@@ -2094,6 +2094,71 @@ app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req,
   res.redirect("/kitchen/items?saved=1");
 });
 
+// TEMP: places/replaces a shop's Grab n Go order for a given delivery date
+// from an explicit item_id->quantity map, for placing the real "this week"
+// orders Joel gave verbally. qty is JSON, e.g. {"20":50,"23":25}.
+app.get("/kitchen/admin/debug-place-grabngo-order", requireAuth, requireRole("kitchen"), (req, res) => {
+  const shop = db.prepare("SELECT * FROM users WHERE slug = ? AND role = 'shop'").get(req.query.shop);
+  if (!shop) return res.json({ error: "shop not found", slug: req.query.shop });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.date || "")) return res.json({ error: "bad date" });
+  let qty;
+  try {
+    qty = JSON.parse(req.query.qty || "{}");
+  } catch (e) {
+    return res.json({ error: "bad qty JSON" });
+  }
+
+  const cansItems = db
+    .prepare(
+      `SELECT i.* FROM items i JOIN categories c ON c.id = i.category_id
+       WHERE i.active = 1 AND (i.shop_id IS NULL OR i.shop_id = ?) AND c.slug = 'cans'`
+    )
+    .all(shop.id);
+  const itemsById = {};
+  cansItems.forEach((i) => (itemsById[i.id] = i));
+
+  const plan = Object.entries(qty).map(([itemId, q]) => {
+    const item = itemsById[itemId];
+    return { itemId: Number(itemId), quantity: q, name: item ? item.name : null, valid: !!item };
+  });
+
+  if (req.query.dryrun === "1") {
+    return res.json({ shop: shop.slug, date: req.query.date, plan });
+  }
+
+  if (plan.some((p) => !p.valid)) {
+    return res.json({ error: "some item ids are not valid Grab n Go items for this shop", plan });
+  }
+
+  let order = db.prepare("SELECT * FROM orders WHERE shop_id = ? AND delivery_date = ?").get(shop.id, req.query.date);
+  if (order) {
+    db.prepare(
+      `DELETE FROM order_items WHERE order_id = ? AND item_id IN (
+         SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'cans'
+       )`
+    ).run(order.id);
+    db.prepare("UPDATE orders SET updated_at = CURRENT_TIMESTAMP, placed_by = ? WHERE id = ?").run(
+      "Joel (admin)",
+      order.id
+    );
+  } else {
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO orders (shop_id, delivery_date, is_late, placed_by) VALUES (?, ?, 0, ?)")
+      .run(shop.id, req.query.date, "Joel (admin)");
+    order = { id: lastInsertRowid };
+  }
+
+  const insertOrderItem = db.prepare(
+    "INSERT INTO order_items (order_id, item_id, name, unit, quantity, current_stock, note) VALUES (?, ?, ?, ?, ?, NULL, NULL)"
+  );
+  for (const p of plan) {
+    const item = itemsById[p.itemId];
+    insertOrderItem.run(order.id, item.id, item.name, item.unit, p.quantity);
+  }
+
+  res.json({ ok: true, shop: shop.slug, date: req.query.date, orderId: order.id, plan });
+});
+
 app.post("/kitchen/items/:id/toggle", requireAuth, requireRole("kitchen"), (req, res) => {
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item) {
