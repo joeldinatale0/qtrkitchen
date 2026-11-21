@@ -270,28 +270,48 @@ db.exec(`
 
   -- One daily stock check per shop per day: staff count what's physically
   -- on hand for every item that has a par level, and a suggested order
-  -- quantity (par minus stock, floored at 0) is generated immediately —
-  -- a standalone checklist, independent of actually placing a food order.
+  -- standard ("3 boxes", "Fill", "PAR as required", etc, not a plain
+  -- number), matching the real paper stocklist booklets shop-by-shop.
+  -- Each shop's checklist is its own list, seeded separately below —
+  -- only Essendon is seeded for now.
+  CREATE TABLE IF NOT EXISTS stock_checklist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    par_standard TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(shop_slug, name)
+  );
+
   CREATE TABLE IF NOT EXISTS stock_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shop_slug TEXT NOT NULL,
     check_date TEXT NOT NULL,
+    notes TEXT,
     submitted_by TEXT,
     submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(shop_slug, check_date)
   );
 
-  CREATE TABLE IF NOT EXISTS stock_check_items (
+  -- One row per checklist item per submission: whether it was ticked as
+  -- needing topping up that day (the generated stocklist is just the
+  -- ticked rows) — name/par_standard are copied in at submission time so
+  -- a later edit to the checklist item doesn't rewrite history.
+  CREATE TABLE IF NOT EXISTS stock_check_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_check_id INTEGER NOT NULL REFERENCES stock_checks(id) ON DELETE CASCADE,
-    item_id INTEGER REFERENCES items(id),
+    checklist_item_id INTEGER REFERENCES stock_checklist_items(id),
     name TEXT NOT NULL,
-    unit TEXT NOT NULL DEFAULT 'ea',
-    par_level INTEGER,
-    current_stock INTEGER,
-    suggested_qty INTEGER
+    par_standard TEXT,
+    needs_topup INTEGER NOT NULL DEFAULT 0
   );
 `);
+
+// This table briefly existed with a different (numeric par/suggested-qty)
+// structure before the real booklet-based design replaced it — dropped
+// since nothing was ever successfully submitted to it.
+db.exec("DROP TABLE IF EXISTS stock_check_items");
 
 // Seed each shop with a default $500 float — kitchen can edit per shop from
 // the EOD Cash Sheets admin page if a store's actual float differs.
@@ -353,12 +373,66 @@ ensureColumn("eod_cash_sheets", "nights_cash_cents", "INTEGER");
 // consistency with every other shop's single Uber column.
 ensureColumn("eod_cash_sheets", "quartertwo_uber_cents", "INTEGER");
 ensureColumn("eod_cash_sheets", "melt_club_uber_cents", "INTEGER");
+// stock_checks already existed (from the brief numeric-par version of this
+// feature) before "notes" was added to its CREATE TABLE statement above —
+// CREATE TABLE IF NOT EXISTS won't retrofit a column onto an existing
+// table, hence the explicit migration.
+ensureColumn("stock_checks", "notes", "TEXT");
 
 // The shop account seeded as "QTR Moonee Ponds" now trades as Quarter Two
 // — same account, slug and data, just a new display name.
 db.prepare(
   "UPDATE users SET name = 'Quarter Two' WHERE slug = 'mooneeponds' AND role = 'shop' AND name != 'Quarter Two'"
 ).run();
+
+// Essendon's real "Stocklist & Par" booklet, transcribed directly — only
+// Essendon is seeded for now, other shops get their own list added later.
+const ESSENDON_STOCK_CHECKLIST = [
+  ["Almond Milk", "3 boxes"],
+  ["Soy Milk", "2 boxes"],
+  ["Oat Milk", "2 boxes"],
+  ["Lactose Free Milk", "1 box"],
+  ["Mont Blanc Cream", "1 bottle in fridge"],
+  ["Maca Cream", "1 bottle in fridge"],
+  ["4oz Cups", "2 sleeves"],
+  ["4oz Lids", "2 sleeves"],
+  ["6oz Cups", "4 sleeves"],
+  ["8oz Cups", "4 sleeves"],
+  ["8oz Lids", "8 sleeves"],
+  ["12oz Cups", "4 sleeves"],
+  ["16oz Lids", "2 sleeves"],
+  ["Can Lids", "2 sleeves"],
+  ["Cans", "Crates full"],
+  ["Lunch Boxes", "1 sleeve"],
+  ["Burger Boxes", "1 sleeve"],
+  ["Napkins", "2 packs"],
+  ["Paper Bags", "2 packs"],
+  ["Uber Bags", "15 bags"],
+  ["Cup Trays", "Shelf full"],
+  ["Straws", "Fill"],
+  ["Paper Sheets", "Fill"],
+  ["Sweetener", "Cup filled"],
+  ["Raw Sugar", "Cup filled"],
+  ["Matcha", "1 bottle"],
+  ["Chocolate Powder", "Fill"],
+  ["Sugar", "Fill"],
+  ["Chai", "Fill"],
+  ["Honey", "Fill"],
+  ["Ice Cream", "1 container"],
+  ["Pro Ball", "Fill"],
+  ["Chocolate Syrup", "1 bottle"],
+  ["Syrups", "1 spare bottle of each"],
+  ["Oats", "PAR as required"],
+  ["Yoghurt", "PAR as required"],
+  ["Chia", "PAR as required"],
+  ["Water", "10 bottles"],
+  ["Sparkling Water", "10 bottles"],
+  ["Retail Shelf", "6 x each (1kg, 500g, 250g)"],
+];
+const insertChecklistItem = db.prepare(
+  "INSERT OR IGNORE INTO stock_checklist_items (shop_slug, name, par_standard, sort_order) VALUES ('essendon', ?, ?, ?)"
+);
+ESSENDON_STOCK_CHECKLIST.forEach(([name, parStandard], i) => insertChecklistItem.run(name, parStandard, i));
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;

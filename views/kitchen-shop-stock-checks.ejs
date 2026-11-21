@@ -10,17 +10,19 @@
     <h2>Stock check for <%= formatDate(selectedDate) %></h2>
     <div class="card">
       <p class="muted" style="margin-top: 0;">Submitted by: <%= selected.check.submitted_by || 'unknown' %></p>
+      <% if (selected.check.notes) { %>
+        <p style="margin-top: 0;"><strong>Notes:</strong> <%= selected.check.notes %></p>
+      <% } %>
       <table>
         <thead>
-          <tr><th>Item</th><th>Par</th><th>In Stock</th><th>Suggested Order</th></tr>
+          <tr><th></th><th>Item</th><th>Par / Standard</th></tr>
         </thead>
         <tbody>
           <% selected.items.forEach(function(i) { %>
             <tr>
-              <td><%= i.name %> <span class="item-unit">/ <%= i.unit %></span></td>
-              <td><%= i.par_level !== null ? i.par_level : '—' %></td>
-              <td><%= i.current_stock !== null ? i.current_stock : '—' %></td>
-              <td><strong><%= i.suggested_qty !== null ? i.suggested_qty : '—' %></strong></td>
+              <td><%= i.needs_topup ? '☑' : '—' %></td>
+              <td><%= i.name %></td>
+              <td class="muted"><%= i.par_standard %></td>
             </tr>
           <% }) %>
         </tbody>
