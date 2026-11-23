@@ -2459,7 +2459,7 @@ function parseManualCateringItems(text) {
 app.get("/kitchen/admin/debug-catering-manual-rows", requireAuth, requireRole("kitchen"), (req, res) => {
   const rows = db
     .prepare(
-      "SELECT id, customer_name, event_date, created_at, total_cents FROM catering_orders_manual WHERE event_date LIKE ? ORDER BY id"
+      "SELECT * FROM catering_orders_manual WHERE event_date LIKE ? ORDER BY id"
     )
     .all(`%${req.query.date || "2026-11-28"}%`);
   res.json(rows);
