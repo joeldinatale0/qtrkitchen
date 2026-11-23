@@ -2465,6 +2465,55 @@ app.get("/kitchen/admin/debug-catering-manual-rows", requireAuth, requireRole("k
   res.json(rows);
 });
 
+// TEMP: structured catering orders (manual + Square, by real event date,
+// not placed date) for a date range — for computing prep quantities.
+app.get("/kitchen/admin/debug-catering-by-event-date", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const start = req.query.start;
+  const end = req.query.end;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return res.json({ error: "bad start/end" });
+  }
+
+  const manualRows = db
+    .prepare(
+      "SELECT * FROM catering_orders_manual WHERE substr(event_date, 1, 10) >= ? AND substr(event_date, 1, 10) <= ? ORDER BY event_date"
+    )
+    .all(start, end);
+  const manualOrders = manualRows.map((row) => ({
+    source: "manual",
+    customer: row.customer_name || "",
+    eventDate: row.event_date || "",
+    fulfillment: row.fulfillment || "",
+    lineItems: JSON.parse(row.items_json),
+  }));
+
+  let squareOrders = [];
+  let squareError = null;
+  try {
+    const today = melbourneDateString();
+    const placedStart = addDays(today, -14);
+    const placedEnd = addDays(today, 60);
+    const allSquare = await buildCateringOrders(placedStart, placedEnd);
+    for (const o of allSquare) {
+      const m = (o.eventDate || "").match(/\d{4}-\d{2}-\d{2}/);
+      const normalized = m ? m[0] : null;
+      if (normalized && normalized >= start && normalized <= end) {
+        squareOrders.push({
+          source: "square",
+          customer: o.customer,
+          eventDate: normalized,
+          fulfillment: o.fulfillment,
+          lineItems: o.lineItems,
+        });
+      }
+    }
+  } catch (err) {
+    squareError = err.message;
+  }
+
+  res.json({ manualOrders, squareOrders, squareError });
+});
+
 app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
   const { customer_name, phone, email, event_date, fulfillment, address, notes, items_text, total } = req.body;
 
