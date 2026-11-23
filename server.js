@@ -2456,6 +2456,15 @@ function parseManualCateringItems(text) {
     });
 }
 
+app.get("/kitchen/admin/debug-catering-manual-rows", requireAuth, requireRole("kitchen"), (req, res) => {
+  const rows = db
+    .prepare(
+      "SELECT id, customer_name, event_date, created_at, total_cents FROM catering_orders_manual WHERE event_date LIKE ? ORDER BY id"
+    )
+    .all(`%${req.query.date || "2026-11-28"}%`);
+  res.json(rows);
+});
+
 app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
   const { customer_name, phone, email, event_date, fulfillment, address, notes, items_text, total } = req.body;
 
