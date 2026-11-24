@@ -453,13 +453,13 @@ const insertChecklistItem = db.prepare(
   "INSERT INTO stock_checklist_items (shop_slug, name, par_standard, par_level, par_unit, sort_order) VALUES ('essendon', ?, ?, ?, ?, ?)"
 );
 const updateChecklistItemPar = db.prepare(
-  "UPDATE stock_checklist_items SET par_standard = ?, par_level = ?, par_unit = ? WHERE shop_slug = 'essendon' AND name = ?"
+  "UPDATE stock_checklist_items SET par_standard = ?, par_level = ?, par_unit = ?, sort_order = ? WHERE shop_slug = 'essendon' AND name = ?"
 );
 const findChecklistItem = db.prepare("SELECT id FROM stock_checklist_items WHERE shop_slug = 'essendon' AND name = ?");
 ESSENDON_STOCK_CHECKLIST.forEach(([name, parLevel, parUnit], i) => {
   const parStandard = `${parLevel} ${parUnit}`;
   if (findChecklistItem.get(name)) {
-    updateChecklistItemPar.run(parStandard, parLevel, parUnit, name);
+    updateChecklistItemPar.run(parStandard, parLevel, parUnit, i, name);
   } else {
     insertChecklistItem.run(name, parStandard, parLevel, parUnit, i);
   }
