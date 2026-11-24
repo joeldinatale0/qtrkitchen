@@ -15,14 +15,15 @@
       <% } %>
       <table>
         <thead>
-          <tr><th></th><th>Item</th><th>Par / Standard</th></tr>
+          <tr><th>Item</th><th>Have</th><th>Par</th><th>Grabbed from back</th></tr>
         </thead>
         <tbody>
           <% selected.items.forEach(function(i) { %>
             <tr>
-              <td><%= i.needs_topup ? '☑' : '—' %></td>
               <td><%= i.name %></td>
-              <td class="muted"><%= i.par_standard %></td>
+              <td><%= i.current_stock %></td>
+              <td class="muted"><%= i.par_level %> <%= i.par_unit %></td>
+              <td><%= i.shortfall > 0 ? (i.shortfall + ' ' + i.par_unit) : '—' %></td>
             </tr>
           <% }) %>
         </tbody>

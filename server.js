@@ -959,14 +959,14 @@ app.get("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
   const existing = db
     .prepare("SELECT * FROM stock_checks WHERE shop_slug = ? AND check_date = ?")
     .get(shopSlug, checkDate);
-  let existingTicked = {};
+  let existingStock = {};
   let generated = null;
   if (existing) {
     const rows = db.prepare("SELECT * FROM stock_check_entries WHERE stock_check_id = ? ORDER BY id").all(existing.id);
     rows.forEach((r) => {
-      if (r.checklist_item_id) existingTicked[r.checklist_item_id] = Boolean(r.needs_topup);
+      if (r.checklist_item_id) existingStock[r.checklist_item_id] = r.current_stock;
     });
-    if (req.query.saved === "1") generated = rows.filter((r) => r.needs_topup);
+    if (req.query.saved === "1") generated = rows.filter((r) => r.shortfall > 0);
   }
 
   const recent = db
@@ -977,7 +977,7 @@ app.get("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
     checkDate,
     today: melbourneDateString(),
     checklistItems,
-    existingTicked,
+    existingStock,
     existingNotes: existing ? existing.notes : "",
     existing,
     generated,
@@ -995,12 +995,19 @@ app.post("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
     .prepare("SELECT * FROM stock_checklist_items WHERE shop_slug = ? AND active = 1")
     .all(shopSlug);
 
-  const rows = checklistItems.map((item) => ({
-    checklistItemId: item.id,
-    name: item.name,
-    parStandard: item.par_standard,
-    needsTopup: req.body[`topup_${item.id}`] === "on",
-  }));
+  const rows = checklistItems.map((item) => {
+    const raw = req.body[`stock_${item.id}`];
+    const currentStock = raw !== undefined && raw.trim() !== "" ? Number(raw) : 0;
+    const shortfall = Math.max(item.par_level - currentStock, 0);
+    return {
+      checklistItemId: item.id,
+      name: item.name,
+      parLevel: item.par_level,
+      parUnit: item.par_unit,
+      currentStock,
+      shortfall,
+    };
+  });
 
   const { lastInsertRowid: stockCheckId } = (() => {
     const existing = db.prepare("SELECT id FROM stock_checks WHERE shop_slug = ? AND check_date = ?").get(shopSlug, checkDate);
@@ -1017,22 +1024,20 @@ app.post("/stock-check", requireAuth, requireRole("shop"), (req, res) => {
   })();
 
   const insertEntry = db.prepare(
-    "INSERT INTO stock_check_entries (stock_check_id, checklist_item_id, name, par_standard, needs_topup) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO stock_check_entries (stock_check_id, checklist_item_id, name, par_level, par_unit, current_stock, shortfall) VALUES (?, ?, ?, ?, ?, ?, ?)"
   );
   for (const r of rows) {
-    insertEntry.run(stockCheckId, r.checklistItemId, r.name, r.parStandard, r.needsTopup ? 1 : 0);
+    insertEntry.run(stockCheckId, r.checklistItemId, r.name, r.parLevel, r.parUnit, r.currentStock, r.shortfall);
   }
 
   if (process.env.GMAIL_APP_PASSWORD) {
-    const toppedUp = rows.filter((r) => r.needsTopup);
+    const shortRows = rows.filter((r) => r.shortfall > 0);
     const lines = [
       `Stock check — ${req.session.user.name} — ${checkDate}`,
       `Submitted by: ${req.session.staffMember.name}`,
       ``,
-      toppedUp.length > 0
-        ? `Needs topping up:`
-        : `Nothing needs topping up today.`,
-      ...toppedUp.map((r) => `  - ${r.name} (par: ${r.parStandard})`),
+      shortRows.length > 0 ? `Grab from the back:` : `Nothing needed from the back today.`,
+      ...shortRows.map((r) => `  - ${r.name}: grab ${r.shortfall} ${r.parUnit} (have ${r.currentStock}, par ${r.parLevel})`),
     ];
     if (notes) lines.push(``, `Notes: ${notes}`);
     sendEmail({

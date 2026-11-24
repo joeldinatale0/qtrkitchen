@@ -379,60 +379,91 @@ ensureColumn("eod_cash_sheets", "melt_club_uber_cents", "INTEGER");
 // table, hence the explicit migration.
 ensureColumn("stock_checks", "notes", "TEXT");
 
+// Stock Check moved from a tick-box "needs topping up" model to a real
+// par_level (number) vs current_stock (number staff count) model, so the
+// generated stocklist is an actual computed shortfall, not just a tick.
+ensureColumn("stock_checklist_items", "par_level", "REAL");
+ensureColumn("stock_checklist_items", "par_unit", "TEXT");
+ensureColumn("stock_check_entries", "current_stock", "REAL");
+ensureColumn("stock_check_entries", "par_level", "REAL");
+ensureColumn("stock_check_entries", "par_unit", "TEXT");
+ensureColumn("stock_check_entries", "shortfall", "REAL");
+
 // The shop account seeded as "QTR Moonee Ponds" now trades as Quarter Two
 // — same account, slug and data, just a new display name.
 db.prepare(
   "UPDATE users SET name = 'Quarter Two' WHERE slug = 'mooneeponds' AND role = 'shop' AND name != 'Quarter Two'"
 ).run();
 
-// Essendon's real "Stocklist & Par" booklet, transcribed directly — only
-// Essendon is seeded for now, other shops get their own list added later.
+// Essendon's real "Stocklist & Par" booklet, transcribed directly, with
+// every item now given a real numeric par level + unit (Joel's own figures)
+// so the stock check can compute an actual shortfall instead of a tick box.
+// Oats/Yoghurt/Chia were dropped — those are tracked by the Grab n Go
+// ordering flow now, not this checklist. "Retail Shelf" (originally one
+// line covering three pack sizes) is split into one line per size.
+// Only Essendon is seeded for now, other shops get their own list later.
 const ESSENDON_STOCK_CHECKLIST = [
-  ["Almond Milk", "3 boxes"],
-  ["Soy Milk", "2 boxes"],
-  ["Oat Milk", "2 boxes"],
-  ["Lactose Free Milk", "1 box"],
-  ["Mont Blanc Cream", "1 bottle in fridge"],
-  ["Maca Cream", "1 bottle in fridge"],
-  ["4oz Cups", "2 sleeves"],
-  ["4oz Lids", "2 sleeves"],
-  ["6oz Cups", "4 sleeves"],
-  ["8oz Cups", "4 sleeves"],
-  ["8oz Lids", "8 sleeves"],
-  ["12oz Cups", "4 sleeves"],
-  ["16oz Lids", "2 sleeves"],
-  ["Can Lids", "2 sleeves"],
-  ["Cans", "Crates full"],
-  ["Lunch Boxes", "1 sleeve"],
-  ["Burger Boxes", "1 sleeve"],
-  ["Napkins", "2 packs"],
-  ["Paper Bags", "2 packs"],
-  ["Uber Bags", "15 bags"],
-  ["Cup Trays", "Shelf full"],
-  ["Straws", "Fill"],
-  ["Paper Sheets", "Fill"],
-  ["Sweetener", "Cup filled"],
-  ["Raw Sugar", "Cup filled"],
-  ["Matcha", "1 bottle"],
-  ["Chocolate Powder", "Fill"],
-  ["Sugar", "Fill"],
-  ["Chai", "Fill"],
-  ["Honey", "Fill"],
-  ["Ice Cream", "1 container"],
-  ["Pro Ball", "Fill"],
-  ["Chocolate Syrup", "1 bottle"],
-  ["Syrups", "1 spare bottle of each"],
-  ["Oats", "PAR as required"],
-  ["Yoghurt", "PAR as required"],
-  ["Chia", "PAR as required"],
-  ["Water", "10 bottles"],
-  ["Sparkling Water", "10 bottles"],
-  ["Retail Shelf", "6 x each (1kg, 500g, 250g)"],
+  ["Almond Milk", 3, "boxes"],
+  ["Soy Milk", 2, "boxes"],
+  ["Oat Milk", 2, "boxes"],
+  ["Lactose Free Milk", 1, "box"],
+  ["Mont Blanc Cream", 1, "bottle"],
+  ["Maca Cream", 1, "bottle"],
+  ["4oz Cups", 2, "sleeves"],
+  ["4oz Lids", 2, "sleeves"],
+  ["6oz Cups", 4, "sleeves"],
+  ["8oz Cups", 4, "sleeves"],
+  ["8oz Lids", 8, "sleeves"],
+  ["12oz Cups", 4, "sleeves"],
+  ["16oz Lids", 2, "sleeves"],
+  ["Can Lids", 2, "sleeves"],
+  ["Cans", 4, "crates"],
+  ["Lunch Boxes", 1, "sleeve"],
+  ["Burger Boxes", 1, "sleeve"],
+  ["Napkins", 2, "packs"],
+  ["Paper Bags", 2, "packs"],
+  ["Uber Bags", 15, "bags"],
+  ["Cup Trays", 30, "trays"],
+  ["Straws", 2, "packs"],
+  ["Paper Sheets", 1, "sheet"],
+  ["Sweetener", 2, "cups"],
+  ["Raw Sugar", 2, "cups"],
+  ["Matcha", 1, "bottle"],
+  ["Chocolate Powder", 2, "bags"],
+  ["Sugar", 2, "bags"],
+  ["Chai", 2, "bags"],
+  ["Honey", 1, "bottle"],
+  ["Ice Cream", 1, "container"],
+  ["Pro Ball", 4, "boxes"],
+  ["Chocolate Syrup", 1, "bottle"],
+  ["Syrups", 2, "bottles"],
+  ["Water", 10, "bottles"],
+  ["Sparkling Water", 10, "bottles"],
+  ["Retail Shelf (1kg)", 6, "bags"],
+  ["Retail Shelf (500g)", 6, "bags"],
+  ["Retail Shelf (250g)", 6, "bags"],
 ];
+
+// Items the booklet used to track here that are now tracked elsewhere.
+db.prepare(
+  "DELETE FROM stock_checklist_items WHERE shop_slug = 'essendon' AND name IN ('Oats', 'Yoghurt', 'Chia', 'Retail Shelf')"
+).run();
+
 const insertChecklistItem = db.prepare(
-  "INSERT OR IGNORE INTO stock_checklist_items (shop_slug, name, par_standard, sort_order) VALUES ('essendon', ?, ?, ?)"
+  "INSERT INTO stock_checklist_items (shop_slug, name, par_standard, par_level, par_unit, sort_order) VALUES ('essendon', ?, ?, ?, ?, ?)"
 );
-ESSENDON_STOCK_CHECKLIST.forEach(([name, parStandard], i) => insertChecklistItem.run(name, parStandard, i));
+const updateChecklistItemPar = db.prepare(
+  "UPDATE stock_checklist_items SET par_standard = ?, par_level = ?, par_unit = ? WHERE shop_slug = 'essendon' AND name = ?"
+);
+const findChecklistItem = db.prepare("SELECT id FROM stock_checklist_items WHERE shop_slug = 'essendon' AND name = ?");
+ESSENDON_STOCK_CHECKLIST.forEach(([name, parLevel, parUnit], i) => {
+  const parStandard = `${parLevel} ${parUnit}`;
+  if (findChecklistItem.get(name)) {
+    updateChecklistItemPar.run(parStandard, parLevel, parUnit, name);
+  } else {
+    insertChecklistItem.run(name, parStandard, parLevel, parUnit, i);
+  }
+});
 
 function seedIfEmpty() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;

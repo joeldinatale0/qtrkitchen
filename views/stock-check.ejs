@@ -3,7 +3,7 @@
 
 <div class="container">
   <h1>Stocklist &amp; Par</h1>
-  <p class="subtitle">Tick what needs topping up to par.</p>
+  <p class="subtitle">Count what you've got left on the shelf for each item and enter it below.</p>
 
   <form method="GET" action="/stock-check" class="eod-meta" style="margin-bottom: 20px;">
     <div>
@@ -15,19 +15,21 @@
   <% if (generated) { %>
     <div class="success-banner" style="margin-bottom: 20px;">Stock check saved for <%= formatDate(checkDate) %>.</div>
     <div class="card" style="margin-bottom: 30px;">
-      <p class="item-name" style="margin-bottom: 8px;">Needs topping up</p>
+      <p class="item-name" style="margin-bottom: 8px;">Grab from the back</p>
       <% if (generated.length === 0) { %>
-        <p class="muted">Nothing needs topping up today.</p>
+        <p class="muted">Nothing needed from the back today.</p>
       <% } else { %>
         <table>
           <thead>
-            <tr><th>Item</th><th>Par / Standard</th></tr>
+            <tr><th>Item</th><th>Grab</th><th>Have</th><th>Par</th></tr>
           </thead>
           <tbody>
             <% generated.forEach(function(r) { %>
               <tr>
                 <td><strong><%= r.name %></strong></td>
-                <td><%= r.par_standard %></td>
+                <td><%= r.shortfall %> <%= r.par_unit %></td>
+                <td class="muted"><%= r.current_stock %></td>
+                <td class="muted"><%= r.par_level %> <%= r.par_unit %></td>
               </tr>
             <% }) %>
           </tbody>
@@ -44,21 +46,23 @@
       <div class="card">
         <table>
           <thead>
-            <tr><th></th><th>Item</th><th>Par Level / Standard</th></tr>
+            <tr><th>Item</th><th>Par</th><th>Current stock</th></tr>
           </thead>
           <tbody>
             <% checklistItems.forEach(function(item) { %>
               <tr>
-                <td style="width: 32px;">
+                <td><%= item.name %></td>
+                <td class="muted"><%= item.par_level %> <%= item.par_unit %></td>
+                <td style="width: 120px;">
                   <input
-                    type="checkbox"
-                    name="topup_<%= item.id %>"
-                    style="width: 20px; height: 20px;"
-                    <%= existingTicked[item.id] ? 'checked' : '' %>
+                    type="number"
+                    step="1"
+                    min="0"
+                    name="stock_<%= item.id %>"
+                    style="width: 100px;"
+                    value="<%= existingStock[item.id] !== undefined ? existingStock[item.id] : '' %>"
                   />
                 </td>
-                <td><%= item.name %></td>
-                <td class="muted"><%= item.par_standard %></td>
               </tr>
             <% }) %>
           </tbody>
