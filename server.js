@@ -2519,6 +2519,38 @@ app.get("/kitchen/admin/debug-catering-by-event-date", requireAuth, requireRole(
   res.json({ manualOrders, squareOrders, squareError });
 });
 
+// TEMP: all-time Paper Goods totals across every shop, for a one-off report.
+app.get("/kitchen/admin/debug-paper-goods-totals", requireAuth, requireRole("kitchen"), (req, res) => {
+  const perShop = db
+    .prepare(
+      `SELECT u.name AS shop_name, oi.name, oi.unit, SUM(oi.quantity) AS total_qty
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       JOIN users u ON u.id = o.shop_id
+       LEFT JOIN items i ON i.id = oi.item_id
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE c.slug = 'paper'
+       GROUP BY u.name, oi.name, oi.unit
+       ORDER BY u.name, oi.name`
+    )
+    .all();
+
+  const overall = db
+    .prepare(
+      `SELECT oi.name, oi.unit, SUM(oi.quantity) AS total_qty, MAX(i.price) AS price
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN items i ON i.id = oi.item_id
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE c.slug = 'paper'
+       GROUP BY oi.name, oi.unit
+       ORDER BY oi.name`
+    )
+    .all();
+
+  res.json({ perShop, overall });
+});
+
 app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
   const { customer_name, phone, email, event_date, fulfillment, address, notes, items_text, total } = req.body;
 
