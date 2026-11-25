@@ -22,6 +22,7 @@ const {
   buildCateringOrders,
   fetchTandaUsers,
 } = require("./shop-reports");
+const { createMcpRouter } = require("./mcp-server");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -568,6 +569,11 @@ app.set("views", path.join(__dirname, "views"));
 app.set("trust proxy", 1); // one hop to Railway's edge — only used for secure-cookie detection, not for rate limiting (see below)
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
+
+// Read-only MCP connector — its own router with its own auth (a bearer
+// token, not the session system below), so it's independent of login/PIN
+// state entirely. See mcp-server.js.
+app.use("/mcp", createMcpRouter());
 app.use(
   session({
     store: new SqliteStore({
