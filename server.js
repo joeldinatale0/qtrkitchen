@@ -2519,6 +2519,52 @@ app.get("/kitchen/admin/debug-catering-by-event-date", requireAuth, requireRole(
   res.json({ manualOrders, squareOrders, squareError });
 });
 
+// TEMP: finds (and optionally removes) the most recent Paper Goods order
+// placed by a given staff member, across all shops — for "remove X's recent
+// paper goods order" requests where X isn't tied to one shop.
+app.get("/kitchen/admin/debug-find-paper-order", requireAuth, requireRole("kitchen"), (req, res) => {
+  const placedBy = req.query.placedBy || "";
+  if (!placedBy.trim()) return res.json({ error: "missing placedBy" });
+
+  const candidates = db
+    .prepare(
+      `SELECT DISTINCT o.id AS order_id, o.shop_id, o.delivery_date, o.placed_by, u.name AS shop_name
+       FROM orders o
+       JOIN users u ON u.id = o.shop_id
+       JOIN order_items oi ON oi.order_id = o.id
+       LEFT JOIN items i ON i.id = oi.item_id
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE o.placed_by LIKE ? AND c.slug = 'paper'
+       ORDER BY o.delivery_date DESC`
+    )
+    .all(`%${placedBy}%`);
+
+  if (candidates.length === 0) return res.json({ error: "no paper goods orders found for that placed_by", placedBy });
+
+  const mostRecent = candidates[0];
+  const paperItems = db
+    .prepare(
+      `SELECT oi.* FROM order_items oi
+       LEFT JOIN items i ON i.id = oi.item_id
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE oi.order_id = ? AND c.slug = 'paper'
+       ORDER BY oi.id`
+    )
+    .all(mostRecent.order_id);
+
+  if (req.query.dryrun === "1") {
+    return res.json({ candidates, mostRecent, paperItems });
+  }
+
+  db.prepare(
+    `DELETE FROM order_items WHERE order_id = ? AND item_id IN (
+       SELECT i.id FROM items i JOIN categories c ON c.id = i.category_id WHERE c.slug = 'paper'
+     )`
+  ).run(mostRecent.order_id);
+
+  res.json({ ok: true, deletedFrom: mostRecent, deletedItems: paperItems });
+});
+
 app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
   const { customer_name, phone, email, event_date, fulfillment, address, notes, items_text, total } = req.body;
 
