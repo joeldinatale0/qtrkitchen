@@ -2548,7 +2548,18 @@ app.get("/kitchen/admin/debug-paper-goods-totals", requireAuth, requireRole("kit
     )
     .all();
 
-  res.json({ perShop, overall });
+  const dateRange = db
+    .prepare(
+      `SELECT MIN(o.delivery_date) AS earliest, MAX(o.delivery_date) AS latest, COUNT(DISTINCT o.id) AS order_count
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN items i ON i.id = oi.item_id
+       LEFT JOIN categories c ON c.id = i.category_id
+       WHERE c.slug = 'paper'`
+    )
+    .get();
+
+  res.json({ dateRange, perShop, overall });
 });
 
 app.post("/kitchen/catering/add", requireAuth, requireRole("kitchen"), (req, res) => {
