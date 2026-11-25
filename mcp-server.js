@@ -26,6 +26,7 @@ const {
   squareHeaders,
   fetchSquareOrders,
   melbourneDayRangeUtc,
+  melbourneHourOf,
   summarizeSquareOrders,
   topProductEntries,
   fetchTandaLiveLabourCost,
@@ -189,18 +190,113 @@ async function fetchSalesOrdersForShops(shops, start, end) {
   return { perShop, errors };
 }
 
-async function searchSquareSales({ shops, start, end, groupBy, limit, offset }) {
+// Item names at the POS (Square) are not guaranteed to match the kitchen
+// ordering catalog's names (e.g. Square might say "Chia blueberry" where the
+// kitchen catalog says "Berry Chia") — so matching "Grab n Go" or any
+// product group by name needs a loose, multi-keyword OR match, not an
+// exact name. Matching happens per LINE ITEM, not per order, since one
+// order can mix matching and non-matching products.
+function matchesAnyNeedle(name, needles) {
+  if (!needles || needles.length === 0) return true;
+  const lower = (name || "").toLowerCase();
+  return needles.some((n) => lower.includes(n.toLowerCase()));
+}
+
+function aggregateMatchingLineItems(orders, needles) {
+  const byDay = {};
+  const byHour = {};
+  const byItem = {};
+  let totalQty = 0;
+  let totalRevenue = 0;
+  for (const order of orders) {
+    const created = new Date(order.created_at);
+    const day = melbourneDateStrOf(created);
+    const hour = melbourneHourOf(created);
+    for (const li of order.line_items || []) {
+      const name = (li.name || "").trim();
+      if (!matchesAnyNeedle(name, needles)) continue;
+      const qty = Number(li.quantity) || 0;
+      const revenue = (li.total_money?.amount || 0) / 100;
+      totalQty += qty;
+      totalRevenue += revenue;
+      if (!byDay[day]) byDay[day] = { qty: 0, revenue: 0 };
+      byDay[day].qty += qty;
+      byDay[day].revenue += revenue;
+      if (!byHour[hour]) byHour[hour] = { qty: 0, revenue: 0 };
+      byHour[hour].qty += qty;
+      byHour[hour].revenue += revenue;
+      if (!byItem[name]) byItem[name] = { qty: 0, revenue: 0 };
+      byItem[name].qty += qty;
+      byItem[name].revenue += revenue;
+    }
+  }
+  return { byDay, byHour, byItem, totalQty, totalRevenue };
+}
+
+async function searchSquareSales({ shops, start, end, groupBy, itemNameContains, limit, offset }) {
   if (!validDateRange(start, end)) return "Invalid date range — start must be <= end, both YYYY-MM-DD.";
   const resolvedShops = resolveShops(shops);
   const { perShop, errors } = await fetchSalesOrdersForShops(resolvedShops, start, end);
 
-  const lines = [`SQUARE SALES — ${start} to ${end} (Melbourne time)`, ""];
+  const needles = Array.isArray(itemNameContains) ? itemNameContains.filter(Boolean) : [];
+  const lines = [`SQUARE SALES — ${start} to ${end} (Melbourne time)${needles.length ? ` — items matching: ${needles.join(", ")}` : ""}`, ""];
   for (const [slug, msg] of Object.entries(errors)) lines.push(`(${ALL_SHOP_NAMES[slug] || slug}: ${msg})`);
   if (Object.keys(errors).length) lines.push("");
 
   const allOrders = Object.values(perShop).flat();
   if (allOrders.length === 0) {
     lines.push("No completed sales found for the connected shop(s) in that range.");
+    return lines.join("\n");
+  }
+
+  const effectiveGroupBy = groupBy || "total";
+
+  if (needles.length > 0) {
+    // Item-name-filtered path: every number below is QUANTITY/REVENUE of
+    // just the matching line items, never a whole-order total — a shop's
+    // "Per-shop totals" (all sales, unfiltered) is still shown first for
+    // context, since "how much did Highpoint sell today" vs "how much
+    // Grab n Go did Highpoint sell today" are different questions.
+    lines.push("Per-shop totals (ALL sales, unfiltered, for context):");
+    for (const slug of resolvedShops) {
+      const orders = perShop[slug];
+      if (!orders) continue;
+      const s = summarizeSquareOrders(orders, {});
+      lines.push(`  ${ALL_SHOP_NAMES[slug] || slug}: ${formatMoney(s.netSales)} net sales, ${s.transactionCount} transactions`);
+    }
+    lines.push("");
+
+    if (effectiveGroupBy === "shop") {
+      lines.push(`Matching items, by shop:`);
+      for (const slug of resolvedShops) {
+        const orders = perShop[slug];
+        if (!orders) continue;
+        const agg = aggregateMatchingLineItems(orders, needles);
+        lines.push(`  ${ALL_SHOP_NAMES[slug] || slug}: ${agg.totalQty} sold, ${formatMoney(agg.totalRevenue)}`);
+      }
+    } else {
+      const agg = aggregateMatchingLineItems(allOrders, needles);
+      lines.push(`Matching items — total: ${agg.totalQty} sold, ${formatMoney(agg.totalRevenue)}`);
+      lines.push("");
+      if (effectiveGroupBy === "day") {
+        const dayRows = Object.entries(agg.byDay).sort((a, b) => a[0].localeCompare(b[0]));
+        const p = paginate(dayRows, limit, offset);
+        lines.push("By day:");
+        for (const [day, s] of p.page) lines.push(`  ${day}: ${s.qty} sold, ${formatMoney(s.revenue)}`);
+        lines.push(paginationFooter(p));
+      } else if (effectiveGroupBy === "hour") {
+        const hourRows = Object.entries(agg.byHour).sort((a, b) => Number(a[0]) - Number(b[0]));
+        lines.push("By hour of day (aggregated across the whole range):");
+        for (const [hour, s] of hourRows) lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${s.qty} sold, ${formatMoney(s.revenue)}`);
+      } else if (effectiveGroupBy === "item" || effectiveGroupBy === "top_sellers") {
+        const itemRows = Object.entries(agg.byItem).sort((a, b) => b[1].qty - a[1].qty);
+        const p = paginate(itemRows, limit, offset);
+        lines.push("By matching item:");
+        p.page.forEach(([name, s], i) => lines.push(`  ${p.offset + i + 1}. ${name} — ${s.qty} sold, ${formatMoney(s.revenue)}`));
+        lines.push(paginationFooter(p));
+      }
+      // effectiveGroupBy === "total" already shown above.
+    }
     return lines.join("\n");
   }
 
@@ -216,7 +312,6 @@ async function searchSquareSales({ shops, start, end, groupBy, limit, offset }) 
   }
   lines.push("");
 
-  const effectiveGroupBy = groupBy || "total";
   if (effectiveGroupBy === "total") {
     const combined = summarizeSquareOrders(allOrders, {});
     lines.push(
@@ -631,7 +726,7 @@ function getServer() {
             "SHOPS: essendon, highpoint, mooneeponds (= Quarter Two, display name used elsewhere), melbournecentral.",
             "melbournecentral has no Square/Tanda connection (no sales/labour/report data), but has invoices/orders/EOD cash like the others.",
             "",
-            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers, from Square. essendon/highpoint/mooneeponds only.",
+            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers, from Square. essendon/highpoint/mooneeponds only. Pass itemNameContains (e.g. [\"chia\",\"oats\",\"yoghurt\"]) to count units sold of a product group like Grab n Go, instead of whole-order totals.",
             "- search_square_refunds: refunds by shop/date range, from Square.",
             "- search_labour: who worked, hours, labour cost, by employee/day/shop, from Tanda. $ cost only available for today.",
             "- search_invoices: what a shop was charged by the central kitchen (food/paper goods/grab n go), by week.",
@@ -658,12 +753,18 @@ function getServer() {
     "search_square_sales",
     {
       description:
-        "Search Square sales: net sales, transaction counts, discounts — totals, by shop, by day, by hour of day, or by item (top sellers). Read-only.",
+        "Search Square sales: net sales, transaction counts, discounts, or — if itemNameContains is given — units SOLD and revenue of just matching products (e.g. \"how many Grab n Go sold today at Highpoint\" -> itemNameContains: [\"chia\",\"oats\",\"yoghurt\",\"yogurt\"]). Totals, by shop, by day, by hour of day, or by item (top sellers). POS item names can differ slightly from the kitchen catalog's names, so itemNameContains is a loose OR substring match, not an exact name. Read-only.",
       inputSchema: {
         shops: shopsField,
         start: startField,
         end: endField,
         groupBy: z.enum(["total", "shop", "day", "hour", "item", "top_sellers"]).optional().describe("How to break down the result (default: total)"),
+        itemNameContains: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Only count line items whose Square product name contains ANY of these (case-insensitive substrings) — e.g. [\"chia\",\"oats\",\"yoghurt\"] for Grab n Go. Omit to cover all sales."
+          ),
         limit: limitField,
         offset: offsetField,
       },
