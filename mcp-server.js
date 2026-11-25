@@ -726,7 +726,7 @@ function getServer() {
             "SHOPS: essendon, highpoint, mooneeponds (= Quarter Two, display name used elsewhere), melbournecentral.",
             "melbournecentral has no Square/Tanda connection (no sales/labour/report data), but has invoices/orders/EOD cash like the others.",
             "",
-            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers, from Square. essendon/highpoint/mooneeponds only. Pass itemNameContains (e.g. [\"chia\",\"oats\",\"yoghurt\"]) to count units sold of a product group like Grab n Go, instead of whole-order totals.",
+            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers, from Square. essendon/highpoint/mooneeponds only. Pass itemNameContains to count units sold of a product group instead of whole-order totals — e.g. for Grab n Go, use [\"gng\",\"chia\",\"oats\",\"yoghurt\",\"yogurt\",\"granola\"]: Highpoint's POS names it \"GNG combo\"/\"GNG cans\", while Essendon's POS names individual flavors (\"Oats vanilla\", \"Chia blueberry\", etc) — confirmed against real data, use both keyword sets together for full coverage across shops.",
             "- search_square_refunds: refunds by shop/date range, from Square.",
             "- search_labour: who worked, hours, labour cost, by employee/day/shop, from Tanda. $ cost only available for today.",
             "- search_invoices: what a shop was charged by the central kitchen (food/paper goods/grab n go), by week.",
@@ -753,7 +753,7 @@ function getServer() {
     "search_square_sales",
     {
       description:
-        "Search Square sales: net sales, transaction counts, discounts, or — if itemNameContains is given — units SOLD and revenue of just matching products (e.g. \"how many Grab n Go sold today at Highpoint\" -> itemNameContains: [\"chia\",\"oats\",\"yoghurt\",\"yogurt\"]). Totals, by shop, by day, by hour of day, or by item (top sellers). POS item names can differ slightly from the kitchen catalog's names, so itemNameContains is a loose OR substring match, not an exact name. Read-only.",
+        "Search Square sales: net sales, transaction counts, discounts, or — if itemNameContains is given — units SOLD and revenue of just matching products (e.g. \"how many Grab n Go sold today at Highpoint\" -> itemNameContains: [\"gng\",\"chia\",\"oats\",\"yoghurt\",\"yogurt\",\"granola\"]). Totals, by shop, by day, by hour of day, or by item (top sellers). POS item names differ PER SHOP, not just from the kitchen catalog — e.g. Highpoint sells Grab n Go as \"GNG combo\"/\"GNG cans\" while Essendon sells individual flavors (\"Oats vanilla\", \"Chia blueberry\"), so itemNameContains should include every naming variant across shops, not just one. Read-only.",
       inputSchema: {
         shops: shopsField,
         start: startField,
@@ -763,7 +763,7 @@ function getServer() {
           .array(z.string())
           .optional()
           .describe(
-            "Only count line items whose Square product name contains ANY of these (case-insensitive substrings) — e.g. [\"chia\",\"oats\",\"yoghurt\"] for Grab n Go. Omit to cover all sales."
+            "Only count line items whose Square product name contains ANY of these (case-insensitive substrings) — e.g. [\"gng\",\"chia\",\"oats\",\"yoghurt\",\"yogurt\",\"granola\"] for Grab n Go (covers both Highpoint's \"GNG\" naming and Essendon's per-flavor naming). Omit to cover all sales."
           ),
         limit: limitField,
         offset: offsetField,
