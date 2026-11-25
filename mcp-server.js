@@ -109,7 +109,7 @@ function formatMoney(n) {
 // existing email/PDF this file's functions already feed), patch it onto
 // just the text this server returns.
 function withCurrency(text) {
-  return text.replace(/\$(\d[\d,]*\.\d{2})(?! AUD)/g, (m) => `${m} AUD`);
+  return text.replace(/\$(-?\d[\d,]*\.\d{2})(?! AUD)/g, (m) => `${m} AUD`);
 }
 
 function melbourneDateStrOf(date) {
