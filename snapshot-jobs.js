@@ -157,16 +157,34 @@ async function snapshotTandaDay(db, shopSlug, dateStr, isBackfill) {
     });
 
     if (hasCost) {
+      // Worked intervals only — excludes break windows in the middle of the
+      // shift, same approach as this codebase's existing summarizeTandaShifts
+      // (shop-reports.js). Without this, a shift's break time still gets
+      // counted as worked when distributed into hour buckets, so the hourly
+      // sum comes out higher than the shift's own (break-adjusted) total.
       const startDate = new Date(shift.start * 1000);
       const finishDate = new Date(shift.finish * 1000);
-      for (const b of buckets) {
-        const overlapStart = startDate > b.start ? startDate : b.start;
-        const overlapEnd = finishDate < b.end ? finishDate : b.end;
-        const hrs = (overlapEnd - overlapStart) / 3600000;
-        if (hrs > 0) {
-          if (!hourlyMap[b.hour]) hourlyMap[b.hour] = { hours: 0, costCents: 0 };
-          hourlyMap[b.hour].hours += hrs;
-          hourlyMap[b.hour].costCents += costCents * (hrs / hours);
+      const shiftBreaks = (shift.breaks || []).filter((b) => b.start && b.finish).sort((a, b) => a.start - b.start);
+      const intervals = [];
+      let cursor = startDate;
+      for (const br of shiftBreaks) {
+        const bStart = new Date(br.start * 1000);
+        const bFinish = new Date(br.finish * 1000);
+        if (bStart > cursor) intervals.push([cursor, bStart < finishDate ? bStart : finishDate]);
+        if (bFinish > cursor) cursor = bFinish;
+      }
+      if (cursor < finishDate) intervals.push([cursor, finishDate]);
+
+      for (const [ws, wf] of intervals) {
+        for (const b of buckets) {
+          const overlapStart = ws > b.start ? ws : b.start;
+          const overlapEnd = wf < b.end ? wf : b.end;
+          const hrs = (overlapEnd - overlapStart) / 3600000;
+          if (hrs > 0) {
+            if (!hourlyMap[b.hour]) hourlyMap[b.hour] = { hours: 0, costCents: 0 };
+            hourlyMap[b.hour].hours += hrs;
+            hourlyMap[b.hour].costCents += costCents * (hrs / hours);
+          }
         }
       }
     }
