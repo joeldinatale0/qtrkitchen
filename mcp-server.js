@@ -21,16 +21,10 @@ const {
   SHOP_INTEGRATIONS,
   ALL_SHOP_SLUGS,
   ALL_SHOP_NAMES,
-  buildCateringOrders,
-  SQUARE_API_BASE,
-  squareHeaders,
   fetchSquareOrders,
   fetchSquareRefunds,
   melbourneDayRangeUtc,
-  melbourneHourOf,
   summarizeSquareOrders,
-  topProductEntries,
-  fetchTandaLiveLabourCost,
   fetchLabourDataForShops,
   formatLabourPart,
   buildCashSearchPart,
@@ -47,6 +41,15 @@ const {
   formatCateringPart,
   todayMelbourneStr,
 } = require("./shop-reports");
+const {
+  readSquareDailyTotals,
+  readSquareItemSales,
+  readSquareHourlySales,
+  readTandaShiftsSaved,
+  readTandaDailyLabour,
+  readTandaHourlyLabour,
+  SUPER_GUARANTEE_RATE,
+} = require("./snapshot-jobs");
 
 // ---------- Auth ----------
 
@@ -83,6 +86,9 @@ const SHOP_ALIASES = { quartertwo: "mooneeponds" };
 function toReportingSlug(orderingSlug) {
   return orderingSlug === "mooneeponds" ? "quartertwo" : orderingSlug;
 }
+function fromReportingSlug(reportingSlug) {
+  return reportingSlug === "quartertwo" ? "mooneeponds" : reportingSlug;
+}
 
 function resolveShops(input) {
   if (!input || input === "all" || (Array.isArray(input) && input.length === 0)) {
@@ -112,15 +118,6 @@ function formatMoney(n) {
 // just the text this server returns.
 function withCurrency(text) {
   return text.replace(/\$(-?\d[\d,]*\.\d{2})(?! AUD)/g, (m) => `${m} AUD`);
-}
-
-function melbourneDateStrOf(date) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Melbourne",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
 }
 
 function melbourneDateTimeStrOf(date) {
@@ -191,6 +188,96 @@ async function fetchSalesOrdersForShops(shops, start, end) {
   return { perShop, errors };
 }
 
+// The permanent-store read path: historical days (everything before today)
+// come from the nightly snapshot tables (instant, no Square call); only
+// TODAY, if it's in range, goes live. Returns day/item/hour records in a
+// common shape regardless of which source they came from, so callers don't
+// need to care. Item records carry a date, so "quantity of X over a range"
+// and "X per day" both work from square_item_sales alone — there is no
+// saved hour-by-item breakdown (only whole-shop hourly totals), so
+// itemNameContains + groupBy "hour" is flagged as unavailable for historical
+// ranges rather than silently answered wrong.
+async function getSquareSalesData(shops, start, end) {
+  const todayStr = todayMelbourneStr();
+  const historicalEnd = end < todayStr ? end : addDaysISO(todayStr, -1);
+  const needsLiveToday = start <= todayStr && todayStr <= end;
+  const errors = {};
+
+  const dayRows = [];
+  const itemRows = [];
+  const hourRows = [];
+
+  if (start <= historicalEnd) {
+    const reportingShops = shops.map(toReportingSlug);
+    for (const r of readSquareDailyTotals(db, reportingShops, start, historicalEnd)) {
+      dayRows.push({
+        shopSlug: fromReportingSlug(r.shop_slug),
+        date: r.date,
+        netSalesCents: r.net_sales_cents,
+        grossSalesCents: r.gross_sales_cents,
+        discountsCents: r.discounts_cents,
+        refundsCents: r.refunds_cents,
+        transactionCount: r.transaction_count,
+      });
+    }
+    for (const r of readSquareItemSales(db, reportingShops, start, historicalEnd)) {
+      itemRows.push({
+        shopSlug: fromReportingSlug(r.shop_slug),
+        date: r.date,
+        name: r.item_name,
+        variation: r.variation_name,
+        qty: r.quantity,
+        revenueCents: r.net_revenue_cents,
+      });
+    }
+    for (const r of readSquareHourlySales(db, reportingShops, start, historicalEnd)) {
+      hourRows.push({
+        shopSlug: fromReportingSlug(r.shop_slug),
+        date: r.date,
+        hour: r.hour,
+        netSalesCents: r.net_sales_cents,
+        transactionCount: r.transaction_count,
+      });
+    }
+  }
+
+  if (needsLiveToday) {
+    const { perShop, errors: liveErrors } = await fetchSalesOrdersForShops(shops, todayStr, todayStr);
+    Object.assign(errors, liveErrors);
+    for (const slug of shops) {
+      const orders = perShop[slug];
+      if (!orders) continue;
+      const s = summarizeSquareOrders(orders, {});
+      dayRows.push({
+        shopSlug: slug,
+        date: todayStr,
+        netSalesCents: Math.round(s.netSales * 100),
+        grossSalesCents: Math.round((s.netSales + s.totalDiscounts) * 100),
+        discountsCents: Math.round(s.totalDiscounts * 100),
+        refundsCents: 0, // live path doesn't fetch refunds — use search_square_refunds for today's refunds
+        transactionCount: s.transactionCount,
+      });
+      for (const [name, stat] of Object.entries(s.productStats)) {
+        itemRows.push({ shopSlug: slug, date: todayStr, name, variation: "", qty: stat.qty, revenueCents: Math.round(stat.revenue * 100) });
+      }
+      for (const [hour, stat] of Object.entries(s.hourly)) {
+        hourRows.push({ shopSlug: slug, date: todayStr, hour: Number(hour), netSalesCents: Math.round(stat.sales * 100), transactionCount: stat.count });
+      }
+    }
+  }
+
+  return {
+    dayRows,
+    itemRows,
+    hourRows,
+    errors,
+    needsLiveToday,
+    note: needsLiveToday
+      ? "Today's figures are live from Square; every earlier date is from the saved nightly snapshot store."
+      : "All figures are from the saved nightly snapshot store (instant — no live Square call for this range).",
+  };
+}
+
 // Item names at the POS (Square) are not guaranteed to match the kitchen
 // ordering catalog's names (e.g. Square might say "Chia blueberry" where the
 // kitchen catalog says "Berry Chia") — so matching "Grab n Go" or any
@@ -203,153 +290,129 @@ function matchesAnyNeedle(name, needles) {
   return needles.some((n) => lower.includes(n.toLowerCase()));
 }
 
-function aggregateMatchingLineItems(orders, needles) {
-  const byDay = {};
-  const byHour = {};
-  const byItem = {};
-  let totalQty = 0;
-  let totalRevenue = 0;
-  for (const order of orders) {
-    const created = new Date(order.created_at);
-    const day = melbourneDateStrOf(created);
-    const hour = melbourneHourOf(created);
-    for (const li of order.line_items || []) {
-      const name = (li.name || "").trim();
-      if (!matchesAnyNeedle(name, needles)) continue;
-      const qty = Number(li.quantity) || 0;
-      const revenue = (li.total_money?.amount || 0) / 100;
-      totalQty += qty;
-      totalRevenue += revenue;
-      if (!byDay[day]) byDay[day] = { qty: 0, revenue: 0 };
-      byDay[day].qty += qty;
-      byDay[day].revenue += revenue;
-      if (!byHour[hour]) byHour[hour] = { qty: 0, revenue: 0 };
-      byHour[hour].qty += qty;
-      byHour[hour].revenue += revenue;
-      if (!byItem[name]) byItem[name] = { qty: 0, revenue: 0 };
-      byItem[name].qty += qty;
-      byItem[name].revenue += revenue;
-    }
-  }
-  return { byDay, byHour, byItem, totalQty, totalRevenue };
-}
-
 async function searchSquareSales({ shops, start, end, groupBy, itemNameContains, limit, offset }) {
   if (!validDateRange(start, end)) return "Invalid date range — start must be <= end, both YYYY-MM-DD.";
   const resolvedShops = resolveShops(shops);
-  const { perShop, errors } = await fetchSalesOrdersForShops(resolvedShops, start, end);
-
   const needles = Array.isArray(itemNameContains) ? itemNameContains.filter(Boolean) : [];
-  const lines = [`SQUARE SALES — ${start} to ${end} (Melbourne time)${needles.length ? ` — items matching: ${needles.join(", ")}` : ""}`, ""];
+  const effectiveGroupBy = groupBy || "total";
+
+  if (effectiveGroupBy === "hour" && needles.length > 0) {
+    return "By-hour sales for a specific item group aren't available — the saved snapshot store only keeps whole-shop hourly totals, not an hourly breakdown per item. Use groupBy \"item\"/\"day\"/\"total\" with itemNameContains instead, or groupBy \"hour\" without itemNameContains for whole-shop hourly sales.";
+  }
+
+  const { dayRows, itemRows, hourRows, errors, note } = await getSquareSalesData(resolvedShops, start, end);
+  const lines = [`SQUARE SALES — ${start} to ${end} (Melbourne time)${needles.length ? ` — items matching: ${needles.join(", ")}` : ""}`, `(${note})`, ""];
   for (const [slug, msg] of Object.entries(errors)) lines.push(`(${ALL_SHOP_NAMES[slug] || slug}: ${msg})`);
   if (Object.keys(errors).length) lines.push("");
 
-  const allOrders = Object.values(perShop).flat();
-  if (allOrders.length === 0) {
-    lines.push("No completed sales found for the connected shop(s) in that range.");
+  if (dayRows.length === 0) {
+    lines.push("No sales found for the connected shop(s) in that range.");
     return lines.join("\n");
   }
 
-  const effectiveGroupBy = groupBy || "total";
-
-  if (needles.length > 0) {
-    // Item-name-filtered path: every number below is QUANTITY/REVENUE of
-    // just the matching line items, never a whole-order total — a shop's
-    // "Per-shop totals" (all sales, unfiltered) is still shown first for
-    // context, since "how much did Highpoint sell today" vs "how much
-    // Grab n Go did Highpoint sell today" are different questions.
-    lines.push("Per-shop totals (ALL sales, unfiltered, for context):");
-    for (const slug of resolvedShops) {
-      const orders = perShop[slug];
-      if (!orders) continue;
-      const s = summarizeSquareOrders(orders, {});
-      lines.push(`  ${ALL_SHOP_NAMES[slug] || slug}: ${formatMoney(s.netSales)} net sales, ${s.transactionCount} transactions`);
-    }
-    lines.push("");
-
-    if (effectiveGroupBy === "shop") {
-      lines.push(`Matching items, by shop:`);
-      for (const slug of resolvedShops) {
-        const orders = perShop[slug];
-        if (!orders) continue;
-        const agg = aggregateMatchingLineItems(orders, needles);
-        lines.push(`  ${ALL_SHOP_NAMES[slug] || slug}: ${agg.totalQty} sold, ${formatMoney(agg.totalRevenue)}`);
-      }
-    } else {
-      const agg = aggregateMatchingLineItems(allOrders, needles);
-      lines.push(`Matching items — total: ${agg.totalQty} sold, ${formatMoney(agg.totalRevenue)}`);
-      lines.push("");
-      if (effectiveGroupBy === "day") {
-        const dayRows = Object.entries(agg.byDay).sort((a, b) => a[0].localeCompare(b[0]));
-        const p = paginate(dayRows, limit, offset);
-        lines.push("By day:");
-        for (const [day, s] of p.page) lines.push(`  ${day}: ${s.qty} sold, ${formatMoney(s.revenue)}`);
-        lines.push(paginationFooter(p));
-      } else if (effectiveGroupBy === "hour") {
-        const hourRows = Object.entries(agg.byHour).sort((a, b) => Number(a[0]) - Number(b[0]));
-        lines.push("By hour of day (aggregated across the whole range):");
-        for (const [hour, s] of hourRows) lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${s.qty} sold, ${formatMoney(s.revenue)}`);
-      } else if (effectiveGroupBy === "item" || effectiveGroupBy === "top_sellers") {
-        const itemRows = Object.entries(agg.byItem).sort((a, b) => b[1].qty - a[1].qty);
-        const p = paginate(itemRows, limit, offset);
-        lines.push("By matching item:");
-        p.page.forEach(([name, s], i) => lines.push(`  ${p.offset + i + 1}. ${name} — ${s.qty} sold, ${formatMoney(s.revenue)}`));
-        lines.push(paginationFooter(p));
-      }
-      // effectiveGroupBy === "total" already shown above.
-    }
-    return lines.join("\n");
-  }
-
-  // Per-shop totals always included, regardless of groupBy, for context.
-  lines.push("Per-shop totals:");
+  // Per-shop totals (ALL sales, unfiltered) always included for context.
+  lines.push(needles.length > 0 ? "Per-shop totals (ALL sales, unfiltered, for context):" : "Per-shop totals:");
   for (const slug of resolvedShops) {
-    const orders = perShop[slug];
-    if (!orders) continue;
-    const s = summarizeSquareOrders(orders, {});
+    const rows = dayRows.filter((r) => r.shopSlug === slug);
+    if (rows.length === 0) continue;
+    const netSales = rows.reduce((s, r) => s + r.netSalesCents, 0) / 100;
+    const txCount = rows.reduce((s, r) => s + r.transactionCount, 0);
+    const discounts = rows.reduce((s, r) => s + r.discountsCents, 0) / 100;
     lines.push(
-      `  ${ALL_SHOP_NAMES[slug] || slug}: ${formatMoney(s.netSales)} net sales, ${s.transactionCount} transactions, ${formatMoney(s.totalDiscounts)} discounts`
+      needles.length > 0
+        ? `  ${ALL_SHOP_NAMES[slug] || slug}: ${formatMoney(netSales)} net sales, ${txCount} transactions`
+        : `  ${ALL_SHOP_NAMES[slug] || slug}: ${formatMoney(netSales)} net sales, ${txCount} transactions, ${formatMoney(discounts)} discounts`
     );
   }
   lines.push("");
 
+  const matchingItemRows = needles.length > 0 ? itemRows.filter((r) => matchesAnyNeedle(r.name, needles)) : itemRows;
+
+  if (needles.length > 0) {
+    const totalQty = matchingItemRows.reduce((s, r) => s + r.qty, 0);
+    const totalRevenue = matchingItemRows.reduce((s, r) => s + r.revenueCents, 0) / 100;
+    lines.push(`Matching items — total: ${totalQty} sold, ${formatMoney(totalRevenue)}`, "");
+
+    if (effectiveGroupBy === "shop") {
+      lines.push("Matching items, by shop:");
+      for (const slug of resolvedShops) {
+        const rows = matchingItemRows.filter((r) => r.shopSlug === slug);
+        if (rows.length === 0) continue;
+        const qty = rows.reduce((s, r) => s + r.qty, 0);
+        const revenue = rows.reduce((s, r) => s + r.revenueCents, 0) / 100;
+        lines.push(`  ${ALL_SHOP_NAMES[slug] || slug}: ${qty} sold, ${formatMoney(revenue)}`);
+      }
+    } else if (effectiveGroupBy === "day") {
+      const byDay = {};
+      for (const r of matchingItemRows) {
+        if (!byDay[r.date]) byDay[r.date] = { qty: 0, revenueCents: 0 };
+        byDay[r.date].qty += r.qty;
+        byDay[r.date].revenueCents += r.revenueCents;
+      }
+      const rows = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
+      const p = paginate(rows, limit, offset);
+      lines.push("By day:");
+      for (const [day, s] of p.page) lines.push(`  ${day}: ${s.qty} sold, ${formatMoney(s.revenueCents / 100)}`);
+      lines.push(paginationFooter(p));
+    } else if (effectiveGroupBy === "item" || effectiveGroupBy === "top_sellers") {
+      const byItem = {};
+      for (const r of matchingItemRows) {
+        const key = r.variation ? `${r.name} (${r.variation})` : r.name;
+        if (!byItem[key]) byItem[key] = { qty: 0, revenueCents: 0 };
+        byItem[key].qty += r.qty;
+        byItem[key].revenueCents += r.revenueCents;
+      }
+      const rows = Object.entries(byItem).sort((a, b) => b[1].revenueCents - a[1].revenueCents);
+      const p = paginate(rows, limit, offset);
+      lines.push("By matching item:");
+      p.page.forEach(([name, s], i) => lines.push(`  ${p.offset + i + 1}. ${name} — ${formatMoney(s.revenueCents / 100)}, ${s.qty} sold`));
+      lines.push(paginationFooter(p));
+    }
+    // effectiveGroupBy === "total" already shown above.
+    return lines.join("\n");
+  }
+
   if (effectiveGroupBy === "total") {
-    const combined = summarizeSquareOrders(allOrders, {});
-    lines.push(
-      `Combined total: ${formatMoney(combined.netSales)} net sales across ${combined.transactionCount} transactions, ${formatMoney(combined.totalDiscounts)} discounts.`
-    );
+    const netSales = dayRows.reduce((s, r) => s + r.netSalesCents, 0) / 100;
+    const txCount = dayRows.reduce((s, r) => s + r.transactionCount, 0);
+    const discounts = dayRows.reduce((s, r) => s + r.discountsCents, 0) / 100;
+    lines.push(`Combined total: ${formatMoney(netSales)} net sales across ${txCount} transactions, ${formatMoney(discounts)} discounts.`);
   } else if (effectiveGroupBy === "shop") {
-    // already covered by the per-shop totals above
     lines.push("(See per-shop totals above.)");
   } else if (effectiveGroupBy === "day") {
     const byDay = {};
-    for (const order of allOrders) {
-      const day = melbourneDateStrOf(new Date(order.created_at));
-      const total = (order.total_money?.amount || 0) / 100;
-      if (!byDay[day]) byDay[day] = { netSales: 0, transactionCount: 0 };
-      byDay[day].netSales += total;
-      byDay[day].transactionCount += 1;
+    for (const r of dayRows) {
+      if (!byDay[r.date]) byDay[r.date] = { netSalesCents: 0, transactionCount: 0 };
+      byDay[r.date].netSalesCents += r.netSalesCents;
+      byDay[r.date].transactionCount += r.transactionCount;
     }
-    const dayRows = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
-    const p = paginate(dayRows, limit, offset);
+    const rows = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
+    const p = paginate(rows, limit, offset);
     lines.push("By day:");
-    for (const [day, s] of p.page) lines.push(`  ${day}: ${formatMoney(s.netSales)} (${s.transactionCount} transactions)`);
+    for (const [day, s] of p.page) lines.push(`  ${day}: ${formatMoney(s.netSalesCents / 100)} (${s.transactionCount} transactions)`);
     lines.push(paginationFooter(p));
   } else if (effectiveGroupBy === "hour") {
-    const combined = summarizeSquareOrders(allOrders, {});
-    const hourRows = Object.entries(combined.hourly).sort((a, b) => Number(a[0]) - Number(b[0]));
-    lines.push("By hour of day (aggregated across the whole range):");
-    for (const [hour, s] of hourRows) {
-      lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${formatMoney(s.sales)} (${s.count} transactions)`);
+    const byHour = {};
+    for (const r of hourRows) {
+      if (!byHour[r.hour]) byHour[r.hour] = { netSalesCents: 0, transactionCount: 0 };
+      byHour[r.hour].netSalesCents += r.netSalesCents;
+      byHour[r.hour].transactionCount += r.transactionCount;
     }
+    const rows = Object.entries(byHour).sort((a, b) => Number(a[0]) - Number(b[0]));
+    lines.push("By hour of day (aggregated across the whole range):");
+    for (const [hour, s] of rows) lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${formatMoney(s.netSalesCents / 100)} (${s.transactionCount} transactions)`);
   } else if (effectiveGroupBy === "item" || effectiveGroupBy === "top_sellers") {
-    const combined = summarizeSquareOrders(allOrders, {});
-    const entries = topProductEntries(combined.productStats, 100000); // already sorted by revenue desc
-    const p = paginate(entries, limit, offset);
+    const byItem = {};
+    for (const r of itemRows) {
+      const key = r.variation ? `${r.name} (${r.variation})` : r.name;
+      if (!byItem[key]) byItem[key] = { qty: 0, revenueCents: 0 };
+      byItem[key].qty += r.qty;
+      byItem[key].revenueCents += r.revenueCents;
+    }
+    const rows = Object.entries(byItem).sort((a, b) => b[1].revenueCents - a[1].revenueCents);
+    const p = paginate(rows, limit, offset);
     lines.push(effectiveGroupBy === "top_sellers" ? "Top sellers (by revenue):" : "By item (sorted by revenue):");
-    p.page.forEach(([name, revenue, qty], i) => {
-      lines.push(`  ${p.offset + i + 1}. ${name} — ${formatMoney(revenue)}, ${qty} sold`);
-    });
+    p.page.forEach(([name, s], i) => lines.push(`  ${p.offset + i + 1}. ${name} — ${formatMoney(s.revenueCents / 100)}, ${s.qty} sold`));
     lines.push(paginationFooter(p));
   }
 
@@ -412,23 +475,119 @@ async function searchSquareRefunds({ shops, start, end, limit, offset }) {
 
 // ---------- Labour / roster ----------
 
+// The permanent-store read path for labour, mirroring getSquareSalesData:
+// historical days read from tanda_shifts/tanda_daily_labour (instant, with
+// real per-shift $ cost already saved); only TODAY goes live, where
+// per-shift cost isn't available from Tanda at all (only the whole-shop
+// live_wage_tracker total) — so today's shift rows carry hours but no cost,
+// and today's cost is folded into dailyCostRows as a shop-level total.
+async function getLabourShiftData(shops, start, end) {
+  const todayStr = todayMelbourneStr();
+  const historicalEnd = end < todayStr ? end : addDaysISO(todayStr, -1);
+  const needsLiveToday = start <= todayStr && todayStr <= end;
+  const errors = {};
+  const shiftRows = []; // {shopSlug (ordering), date, userName, hours, costCents}
+  const dailyCostRows = []; // {shopSlug, date, totalHours, totalCostCents, totalCostWithSuperCents, missingCostShifts}
+  let incompleteCount = 0;
+  const costToday = {};
+
+  const reportingShops = shops.map(toReportingSlug);
+
+  if (start <= historicalEnd) {
+    for (const r of readTandaShiftsSaved(db, reportingShops, start, historicalEnd)) {
+      shiftRows.push({ shopSlug: fromReportingSlug(r.shop_slug), date: r.date, userName: r.user_name, hours: r.hours, costCents: r.cost_cents });
+    }
+    for (const r of readTandaDailyLabour(db, reportingShops, start, historicalEnd)) {
+      dailyCostRows.push({
+        shopSlug: fromReportingSlug(r.shop_slug),
+        date: r.date,
+        totalHours: r.total_hours,
+        totalCostCents: r.total_cost_cents,
+        totalCostWithSuperCents: r.total_cost_with_super_cents,
+        missingCostShifts: r.missing_cost_shifts,
+      });
+    }
+  }
+
+  if (needsLiveToday) {
+    const live = await fetchLabourDataForShops(reportingShops, todayStr, todayStr);
+    Object.assign(errors, live.errors);
+    incompleteCount += live.incompleteCount;
+    for (const r of live.rows) {
+      shiftRows.push({ shopSlug: fromReportingSlug(r.shopSlug), date: todayStr, userName: r.userName, hours: r.hours, costCents: null });
+    }
+    for (const [repSlug, costDollars] of Object.entries(live.costToday)) {
+      const slug = fromReportingSlug(repSlug);
+      costToday[slug] = costDollars;
+      const hoursToday = live.rows.filter((r) => r.shopSlug === repSlug).reduce((s, r) => s + r.hours, 0);
+      const costCents = Math.round(costDollars * 100);
+      dailyCostRows.push({
+        shopSlug: slug,
+        date: todayStr,
+        totalHours: hoursToday,
+        totalCostCents: costCents,
+        totalCostWithSuperCents: Math.round(costCents * (1 + SUPER_GUARANTEE_RATE)),
+        missingCostShifts: 0,
+      });
+    }
+  }
+
+  return {
+    shiftRows,
+    dailyCostRows,
+    costToday,
+    incompleteCount,
+    errors,
+    needsLiveToday,
+    note: needsLiveToday
+      ? "Today's figures are live from Tanda; every earlier date is from the saved nightly snapshot store."
+      : "All figures are from the saved nightly snapshot store (instant — no live Tanda call for this range).",
+  };
+}
+
 async function searchLabour({ shops, start, end, groupBy, employeeName, limit, offset }) {
   if (!validDateRange(start, end)) return "Invalid date range — start must be <= end, both YYYY-MM-DD.";
   const resolvedShops = resolveShops(shops);
-  const reportingShops = resolvedShops.map(toReportingSlug);
-  const { rows, roster, costToday, incompleteCount, errors } = await fetchLabourDataForShops(reportingShops, start, end);
+  const effectiveGroupBy = ["employee", "day", "shop", "hour", "none"].includes(groupBy) ? groupBy : "employee";
 
-  let filteredRows = rows;
-  if (employeeName && employeeName.trim()) {
-    const needle = employeeName.trim().toLowerCase();
-    filteredRows = rows.filter((r) => r.userName.toLowerCase().includes(needle));
+  if (effectiveGroupBy === "hour") {
+    const todayStr = todayMelbourneStr();
+    const historicalEnd = end < todayStr ? end : addDaysISO(todayStr, -1);
+    const reportingShops = resolvedShops.map(toReportingSlug);
+    const lines = [`LABOUR BY HOUR OF DAY — ${start} to ${end}`];
+    if (todayStr >= start && todayStr <= end) {
+      lines.push("(Today is excluded — the saved snapshot only covers past days, and Tanda has no live hour-by-hour cost breakdown for an in-progress day.)");
+    }
+    if (start > historicalEnd) {
+      lines.push("", "No historical days in this range to report on.");
+      return lines.join("\n");
+    }
+    const hourly = readTandaHourlyLabour(db, reportingShops, start, historicalEnd);
+    const byHour = {};
+    for (const r of hourly) {
+      if (!byHour[r.hour]) byHour[r.hour] = { hours: 0, costCents: 0 };
+      byHour[r.hour].hours += r.hours;
+      byHour[r.hour].costCents += r.cost_cents;
+    }
+    const rows = Object.entries(byHour).sort((a, b) => Number(a[0]) - Number(b[0]));
+    lines.push("", "By hour of day (aggregated across the whole range; cost includes super-prorated-out — see wage cost only below):");
+    for (const [hour, s] of rows) lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${s.hours.toFixed(2)} hrs, ${formatMoney(s.costCents / 100)} wage`);
+    return withCurrency(lines.join("\n"));
   }
 
-  const effectiveGroupBy = ["employee", "day", "shop", "none"].includes(groupBy) ? groupBy : "employee";
+  const { shiftRows, dailyCostRows, costToday, incompleteCount, errors, note } = await getLabourShiftData(resolvedShops, start, end);
+
+  let filteredRows = shiftRows;
+  if (employeeName && employeeName.trim()) {
+    const needle = employeeName.trim().toLowerCase();
+    filteredRows = shiftRows.filter((r) => r.userName.toLowerCase().includes(needle));
+  }
+  const roster = [...new Set(shiftRows.map((r) => r.userName))].sort();
+
   const keyFor = (r) => {
     if (effectiveGroupBy === "employee") return r.userName;
     if (effectiveGroupBy === "day") return r.date;
-    if (effectiveGroupBy === "shop") return r.shopName;
+    if (effectiveGroupBy === "shop") return ALL_SHOP_NAMES[r.shopSlug] || r.shopSlug;
     return "Total";
   };
   const groups = {};
@@ -443,12 +602,33 @@ async function searchLabour({ shops, start, end, groupBy, employeeName, limit, o
   const labourPart = { ranked: false, note: null, groups: p.page, costToday, incompleteCount, errors };
   const text = withCurrency(formatLabourPart(labourPart));
 
-  const header = [`LABOUR — ${start} to ${end} (grouped by ${effectiveGroupBy})`];
+  const header = [`LABOUR — ${start} to ${end} (grouped by ${effectiveGroupBy})`, `(${note})`];
   if (employeeName) header.push(`Filtered to employees matching "${employeeName}"`);
   if (effectiveGroupBy === "employee" || effectiveGroupBy === "none") {
-    header.push(`Roster who worked in this period: ${roster.map((r) => r.name).join(", ") || "(none)"}`);
+    header.push(`Roster who worked in this period: ${roster.join(", ") || "(none)"}`);
   }
-  return [...header, "", text, paginationFooter(p)].join("\n");
+
+  const costLines = [];
+  if (dailyCostRows.length > 0) {
+    const byDay = {};
+    for (const r of dailyCostRows) {
+      if (!byDay[r.date]) byDay[r.date] = { shopSlug: r.shopSlug, hours: 0, costCents: 0, costWithSuperCents: 0, missing: 0 };
+      byDay[r.date].hours += r.totalHours;
+      byDay[r.date].costCents += r.totalCostCents;
+      byDay[r.date].costWithSuperCents += r.totalCostWithSuperCents;
+      byDay[r.date].missing += r.missingCostShifts;
+    }
+    costLines.push("", "Daily labour cost (wage, and wage + super):");
+    for (const [date, s] of Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]))) {
+      costLines.push(
+        `  ${date}: ${s.hours.toFixed(2)} hrs, ${formatMoney(s.costCents / 100)} wage (${formatMoney(s.costWithSuperCents / 100)} incl. super)${
+          s.missing > 0 ? ` — ${s.missing} shift(s) missing a Tanda cost` : ""
+        }`
+      );
+    }
+  }
+
+  return [...header, "", text, paginationFooter(p), ...costLines].join("\n");
 }
 
 // ---------- Invoices (what a shop was charged by the central kitchen) ----------
@@ -712,9 +892,9 @@ function getServer() {
             "SHOPS: essendon, highpoint, mooneeponds (= Quarter Two, display name used elsewhere), melbournecentral.",
             "melbournecentral has no Square/Tanda connection (no sales/labour/report data), but has invoices/orders/EOD cash like the others.",
             "",
-            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers, from Square. essendon/highpoint/mooneeponds only. Pass itemNameContains to count units sold of a product group instead of whole-order totals — e.g. for Grab n Go, use [\"gng\",\"chia\",\"oats\",\"yoghurt\",\"yogurt\",\"granola\"]: Highpoint's POS names it \"GNG combo\"/\"GNG cans\", while Essendon's POS names individual flavors (\"Oats vanilla\", \"Chia blueberry\", etc) — confirmed against real data, use both keyword sets together for full coverage across shops.",
-            "- search_square_refunds: refunds by shop/date range, from Square.",
-            "- search_labour: who worked, hours, labour cost, by employee/day/shop, from Tanda. $ cost only available for today.",
+            "- search_square_sales: sales totals/by shop/by day/by hour/by item/top sellers. essendon/highpoint/mooneeponds only. Past dates are instant (saved nightly snapshot store), today is live. Pass itemNameContains to count units sold of a product group instead of whole-order totals — e.g. for Grab n Go, use [\"gng\",\"chia\",\"oats\",\"yoghurt\",\"yogurt\",\"granola\"]: Highpoint's POS names it \"GNG combo\"/\"GNG cans\", while Essendon's POS names individual flavors (\"Oats vanilla\", \"Chia blueberry\", etc) — confirmed against real data, use both keyword sets together for full coverage across shops. itemNameContains + groupBy hour isn't available (no saved hourly-by-item breakdown).",
+            "- search_square_refunds: refunds by shop/date range — always live (not in the snapshot store).",
+            "- search_labour: who worked, hours, labour cost (wage + super) by employee/day/shop/hour. Past dates are instant (saved snapshot store, real per-shift Tanda cost), today is live (hours only live, cost from Tanda's live_wage_tracker). groupBy hour excludes today.",
             "- search_invoices: what a shop was charged by the central kitchen (food/paper goods/grab n go), by week.",
             "- search_kitchen_orders: raw quantities a shop ordered from the central kitchen (not the $ invoice view).",
             "- search_delre_orders: orders/stock submitted to Del Re, a separate wholesale supplier (no $ pricing tracked).",
@@ -771,13 +951,13 @@ function getServer() {
     "search_labour",
     {
       description:
-        "Search rosters/labour from Tanda: who worked, hours, labour cost, by shop/date range, grouped by employee, day, or shop. Labour $ cost is only available for today (Tanda has no historical cost endpoint). Read-only.",
+        "Search rosters/labour: who worked, hours, labour cost (wage and wage+super), by shop/date range. groupBy employee/day/shop/none groups hours per that dimension and always appends a daily labour cost breakdown; groupBy hour gives labour cost per hour of the day (e.g. 4-5pm) for the historical part of the range — today is excluded from hourly since Tanda has no live hour-by-hour cost breakdown for an in-progress day. Past dates are instant (from the saved snapshot store); today is always live. Read-only.",
       inputSchema: {
         shops: shopsField,
         start: startField,
         end: endField,
-        groupBy: z.enum(["employee", "day", "shop", "none"]).optional().describe("Default: employee"),
-        employeeName: z.string().optional().describe("Filter to employees whose name contains this text"),
+        groupBy: z.enum(["employee", "day", "shop", "hour", "none"]).optional().describe("Default: employee"),
+        employeeName: z.string().optional().describe("Filter to employees whose name contains this text (ignored for groupBy hour)"),
         limit: limitField,
         offset: offsetField,
       },
