@@ -21,8 +21,6 @@ const {
   formatNaturalSearchEmail,
   buildCateringOrders,
   fetchTandaUsers,
-  melbourneDayRangeUtc,
-  fetchSquareOrders,
 } = require("./shop-reports");
 const { createMcpRouter } = require("./mcp-server");
 const { runNightlySnapshotIfDue, runBackfill, getBackfillStatus, getDataHealth } = require("./snapshot-jobs");
@@ -2114,37 +2112,6 @@ app.post("/kitchen/items/:id/update", requireAuth, requireRole("kitchen"), (req,
 });
 
 // TEMP: raw Tanda API shapes, for designing the permanent sales/labour store.
-app.get("/kitchen/admin/debug-tanda-shape", requireAuth, requireRole("kitchen"), async (req, res) => {
-  const TANDA_API_BASE = "https://my.tanda.co/api/v2";
-  const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
-  const date = req.query.date || "2026-11-20";
-  try {
-    const [shiftsRes, usersRes] = await Promise.all([
-      fetch(`${TANDA_API_BASE}/shifts?from=${date}&to=${date}&show_costs=true`, { headers }),
-      fetch(`${TANDA_API_BASE}/users?limit=3`, { headers }),
-    ]);
-    const shifts = await shiftsRes.json();
-    const users = await usersRes.json();
-
-    let sampleOrder = null;
-    try {
-      const { startUtc, endUtc } = melbourneDayRangeUtc(date);
-      const orders = await fetchSquareOrders("SQUARE_ACCESS_TOKEN", "LJWTC3VTB52T3", startUtc, endUtc);
-      sampleOrder = orders.find((o) => (o.discounts || []).length > 0) || orders[0] || null;
-    } catch (err) {
-      sampleOrder = { error: err.message };
-    }
-
-    res.json({
-      sampleShift: Array.isArray(shifts) ? shifts.slice(0, 2) : shifts,
-      sampleUsers: Array.isArray(users) ? users.slice(0, 3) : users,
-      sampleOrder,
-    });
-  } catch (err) {
-    res.json({ error: err.message });
-  }
-});
-
 app.post("/kitchen/items/:id/toggle", requireAuth, requireRole("kitchen"), (req, res) => {
   const item = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
   if (item) {
