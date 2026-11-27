@@ -24,6 +24,7 @@ const {
 } = require("./shop-reports");
 const { createMcpRouter } = require("./mcp-server");
 const { runNightlySnapshotIfDue, runBackfill, getBackfillStatus, getDataHealth } = require("./snapshot-jobs");
+const { runLabourAudit, getLabourAuditStatus } = require("./labour-audit");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2148,6 +2149,17 @@ app.post("/kitchen/admin/data-health/backfill", requireAuth, requireRole("kitche
 
 app.get("/kitchen/admin/data-health/backfill-status", requireAuth, requireRole("kitchen"), (req, res) => {
   res.json(getBackfillStatus());
+});
+
+// Read-only audit: saved Tanda labour snapshot vs a fresh live Tanda pull,
+// for every day the snapshot store has data for. Writes nothing.
+app.post("/kitchen/admin/labour-audit", requireAuth, requireRole("kitchen"), (req, res) => {
+  const result = runLabourAudit(db);
+  res.json(result);
+});
+
+app.get("/kitchen/admin/labour-audit/status", requireAuth, requireRole("kitchen"), (req, res) => {
+  res.json(getLabourAuditStatus());
 });
 
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
