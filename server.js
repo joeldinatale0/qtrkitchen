@@ -2162,6 +2162,36 @@ app.get("/kitchen/admin/labour-audit/status", requireAuth, requireRole("kitchen"
   res.json(getLabourAuditStatus());
 });
 
+// TEMP: probe Tanda's schedules endpoint (roster/planned shifts, distinct
+// from /shifts which is actual worked time) + find a user by name.
+app.get("/kitchen/admin/debug-tanda-schedule", requireAuth, requireRole("kitchen"), async (req, res) => {
+  const TANDA_API_BASE = "https://my.tanda.co/api/v2";
+  const headers = { Authorization: `Bearer ${process.env.TANDA_ACCESS_TOKEN}` };
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const nameQuery = (req.query.name || "Armando").toLowerCase();
+  const results = {};
+  try {
+    const schedulesRes = await fetch(`${TANDA_API_BASE}/schedules?from=${date}&to=${date}`, { headers });
+    results.schedulesStatus = schedulesRes.status;
+    if (schedulesRes.ok) {
+      const data = await schedulesRes.json();
+      results.schedulesSample = Array.isArray(data) ? data.slice(0, 3) : data;
+    } else {
+      results.schedulesBody = await schedulesRes.text();
+    }
+  } catch (err) {
+    results.schedulesError = err.message;
+  }
+  try {
+    const usersRes = await fetch(`${TANDA_API_BASE}/users`, { headers });
+    const users = await usersRes.json();
+    results.matchingUsers = users.filter((u) => (u.name || "").toLowerCase().includes(nameQuery));
+  } catch (err) {
+    results.usersError = err.message;
+  }
+  res.json(results);
+});
+
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
   const shops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({
     slug,
