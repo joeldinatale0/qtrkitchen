@@ -6,6 +6,19 @@ const dbPath = process.env.DB_PATH || path.join(__dirname, "data.sqlite");
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 
+// tanda_shifts' schema changed (finish_ts/hours now nullable, status and
+// no_clock_out added) to stop silently dropping no-clock-out shifts — this
+// data is a re-derivable snapshot (see snapshot-jobs.js backfill), not
+// irreplaceable, so the old-shaped table is just dropped and recreated
+// below rather than migrated column-by-column.
+{
+  const cols = db.prepare("PRAGMA table_info(tanda_shifts)").all();
+  const finishCol = cols.find((c) => c.name === "finish_ts");
+  if (finishCol && finishCol.notnull) {
+    db.exec("DROP TABLE tanda_shifts");
+  }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,18 +376,38 @@ db.exec(`
   -- recompute cost independently, so a missing cost is surfaced (via
   -- tanda_daily_labour.missing_cost_shifts and the monitoring page) rather
   -- than silently estimated.
+  -- finish_ts/hours are nullable — a shift with no clock-out is still saved
+  -- (no_clock_out = 1) rather than silently dropped, so it can be named in
+  -- every labour answer rather than just lowering a count. status is
+  -- Tanda's own shift status (APPROVED/PENDING/...), so an unapproved shift
+  -- can be flagged too. cost_source 'salaried' means a flat daily rate from
+  -- salaried_staff_rates overrode Tanda's own (hourly-award) cost for this
+  -- person that day.
   CREATE TABLE IF NOT EXISTS tanda_shifts (
     shop_slug TEXT NOT NULL,
     date TEXT NOT NULL,
     tanda_user_id INTEGER NOT NULL,
     user_name TEXT NOT NULL,
     start_ts INTEGER NOT NULL,
-    finish_ts INTEGER NOT NULL,
-    hours REAL NOT NULL,
+    finish_ts INTEGER,
+    hours REAL,
     break_minutes INTEGER NOT NULL DEFAULT 0,
     cost_cents INTEGER,
-    cost_source TEXT NOT NULL CHECK (cost_source IN ('tanda', 'missing')),
+    cost_source TEXT NOT NULL CHECK (cost_source IN ('tanda', 'missing', 'salaried')),
+    status TEXT,
+    no_clock_out INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (shop_slug, date, tanda_user_id, start_ts)
+  );
+
+  -- Staff paid a flat daily rate rather than Tanda's hourly award costing —
+  -- empty until Joel adds real figures (see /kitchen/admin/salaried-staff).
+  -- When a tanda_user_id here has a shift on a given day, that day's cost
+  -- for them is this flat rate instead of Tanda's own per-shift cost.
+  CREATE TABLE IF NOT EXISTS salaried_staff_rates (
+    tanda_user_id INTEGER PRIMARY KEY,
+    user_name TEXT NOT NULL,
+    daily_salary_cents INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
   -- total_cost_cents is wage cost only (Tanda's own cost_breakdown has no

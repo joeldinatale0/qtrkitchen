@@ -1,0 +1,61 @@
+<%- include('partials/head', { title: "Salaried Staff — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <p class="muted"><a href="/kitchen/admin/data-health">&larr; Data Health</a></p>
+  <h1>Salaried Staff</h1>
+  <p class="subtitle">
+    Staff paid a flat daily rate instead of Tanda's hourly award costing (e.g. a salaried manager).
+    When someone here has a shift on a day, that day's saved labour cost for them uses this rate instead
+    of whatever Tanda computed — hours are still recorded as Tanda reports them, only the $ is overridden.
+    Takes effect the next time that day is saved (tonight for today/yesterday, or re-run the backfill for past days).
+  </p>
+
+  <% if (saved) { %>
+    <div class="success-banner">Saved.</div>
+  <% } %>
+
+  <div class="card">
+    <% if (rates.length === 0) { %>
+      <p class="muted">No salaried staff set up yet.</p>
+    <% } else { %>
+      <table>
+        <thead><tr><th>Name</th><th>Tanda User ID</th><th>Daily Rate</th><th></th></tr></thead>
+        <tbody>
+          <% rates.forEach(function(r) { %>
+            <tr>
+              <td><%= r.user_name %></td>
+              <td class="muted"><%= r.tanda_user_id %></td>
+              <td>$<%= (r.daily_salary_cents / 100).toFixed(2) %></td>
+              <td>
+                <form method="POST" action="/kitchen/admin/salaried-staff/<%= r.tanda_user_id %>/delete" style="display:inline;">
+                  <button class="btn btn-small" type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+  <div class="card" style="margin-top: 20px;">
+    <h2 style="margin-top: 0;">Add / Update</h2>
+    <form method="POST" action="/kitchen/admin/salaried-staff">
+      <label for="tanda_user_id">Tanda User ID</label>
+      <input type="number" id="tanda_user_id" name="tanda_user_id" required style="margin-bottom: 16px;" />
+      <p class="muted" style="margin-top: -12px;">Ask Joel to look this up, or find it via query_database on the Tanda connector (users list).</p>
+
+      <label for="user_name">Name</label>
+      <input type="text" id="user_name" name="user_name" required style="margin-bottom: 16px;" />
+
+      <label for="daily_salary">Daily Salary $</label>
+      <input type="number" id="daily_salary" name="daily_salary" step="0.01" min="0.01" required style="margin-bottom: 16px;" />
+
+      <button class="btn btn-filled" type="submit">Save</button>
+    </form>
+  </div>
+</div>
+
+</body>
+</html>

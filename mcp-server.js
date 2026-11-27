@@ -477,16 +477,17 @@ async function searchSquareRefunds({ shops, start, end, limit, offset }) {
 
 // The permanent-store read path for labour, mirroring getSquareSalesData:
 // historical days read from tanda_shifts/tanda_daily_labour (instant, with
-// real per-shift $ cost already saved); only TODAY goes live, where
-// per-shift cost isn't available from Tanda at all (only the whole-shop
-// live_wage_tracker total) — so today's shift rows carry hours but no cost,
-// and today's cost is folded into dailyCostRows as a shop-level total.
+// real per-shift $ cost already saved, incl. no-clock-out/unapproved
+// flags); only TODAY goes live, where per-shift cost isn't available from
+// Tanda at all (only the whole-shop live_wage_tracker total) — so today's
+// shift rows carry hours but no cost, and today's cost is folded into
+// dailyCostRows as a shop-level total.
 async function getLabourShiftData(shops, start, end) {
   const todayStr = todayMelbourneStr();
   const historicalEnd = end < todayStr ? end : addDaysISO(todayStr, -1);
   const needsLiveToday = start <= todayStr && todayStr <= end;
   const errors = {};
-  const shiftRows = []; // {shopSlug (ordering), date, userName, hours, costCents}
+  const shiftRows = []; // {shopSlug (ordering), date, userId, userName, startTs, hours, costCents, status, noClockOut}
   const dailyCostRows = []; // {shopSlug, date, totalHours, totalCostCents, totalCostWithSuperCents, missingCostShifts}
   let incompleteCount = 0;
   const costToday = {};
@@ -495,7 +496,17 @@ async function getLabourShiftData(shops, start, end) {
 
   if (start <= historicalEnd) {
     for (const r of readTandaShiftsSaved(db, reportingShops, start, historicalEnd)) {
-      shiftRows.push({ shopSlug: fromReportingSlug(r.shop_slug), date: r.date, userName: r.user_name, hours: r.hours, costCents: r.cost_cents });
+      shiftRows.push({
+        shopSlug: fromReportingSlug(r.shop_slug),
+        date: r.date,
+        userId: r.tanda_user_id,
+        userName: r.user_name,
+        startTs: r.start_ts,
+        hours: r.hours,
+        costCents: r.cost_cents,
+        status: r.status,
+        noClockOut: !!r.no_clock_out,
+      });
     }
     for (const r of readTandaDailyLabour(db, reportingShops, start, historicalEnd)) {
       dailyCostRows.push({
@@ -514,7 +525,20 @@ async function getLabourShiftData(shops, start, end) {
     Object.assign(errors, live.errors);
     incompleteCount += live.incompleteCount;
     for (const r of live.rows) {
-      shiftRows.push({ shopSlug: fromReportingSlug(r.shopSlug), date: todayStr, userName: r.userName, hours: r.hours, costCents: null });
+      // Today's in-progress shifts are expected to have no finish time yet —
+      // that's normal, not a "didn't clock out" problem, so noClockOut is
+      // never set true here (only for saved/historical rows above).
+      shiftRows.push({
+        shopSlug: fromReportingSlug(r.shopSlug),
+        date: todayStr,
+        userId: Number(r.userId),
+        userName: r.userName,
+        startTs: null,
+        hours: r.hours,
+        costCents: null,
+        status: null,
+        noClockOut: false,
+      });
     }
     for (const [repSlug, costDollars] of Object.entries(live.costToday)) {
       const slug = fromReportingSlug(repSlug);
@@ -545,10 +569,34 @@ async function getLabourShiftData(shops, start, end) {
   };
 }
 
-async function searchLabour({ shops, start, end, groupBy, employeeName, limit, offset }) {
+function formatMelbourneTimeOf(ts) {
+  if (!ts) return "unknown time";
+  return new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(
+    new Date(ts * 1000)
+  );
+}
+
+// Net sales for the same shop/date(s), for computing labour % the same way
+// daily_shop_snapshots does (wage-only cost / net sales) — the single
+// definition every labour tool in this file uses, so a figure quoted from
+// here always matches the existing daily report for the same shop/day.
+function getNetSalesByShopDate(shops, start, end) {
+  const reportingShops = shops.map(toReportingSlug);
+  const map = {}; // "shopSlug|date" -> netSalesCents
+  for (const r of readSquareDailyTotals(db, reportingShops, start, end)) {
+    map[`${fromReportingSlug(r.shop_slug)}|${r.date}`] = r.net_sales_cents;
+  }
+  return map;
+}
+
+async function searchLabour({ shops, start, end, groupBy, employeeId, employeeIds, employeeName, limit, offset }) {
   if (!validDateRange(start, end)) return "Invalid date range — start must be <= end, both YYYY-MM-DD.";
   const resolvedShops = resolveShops(shops);
-  const effectiveGroupBy = ["employee", "day", "shop", "hour", "none"].includes(groupBy) ? groupBy : "employee";
+  let effectiveGroupBy = ["employee", "day", "shop", "hour", "none"].includes(groupBy) ? groupBy : "employee";
+
+  const idFilter = new Set(
+    [...(employeeId ? [employeeId] : []), ...(Array.isArray(employeeIds) ? employeeIds : [])].map(Number).filter(Boolean)
+  );
 
   if (effectiveGroupBy === "hour") {
     const todayStr = todayMelbourneStr();
@@ -570,7 +618,7 @@ async function searchLabour({ shops, start, end, groupBy, employeeName, limit, o
       byHour[r.hour].costCents += r.cost_cents;
     }
     const rows = Object.entries(byHour).sort((a, b) => Number(a[0]) - Number(b[0]));
-    lines.push("", "By hour of day (aggregated across the whole range; cost includes super-prorated-out — see wage cost only below):");
+    lines.push("", "By hour of day (aggregated across the whole range; wage cost only — add super separately, see search_labour groupBy day/shop):");
     for (const [hour, s] of rows) lines.push(`  ${String(hour).padStart(2, "0")}:00 — ${s.hours.toFixed(2)} hrs, ${formatMoney(s.costCents / 100)} wage`);
     return withCurrency(lines.join("\n"));
   }
@@ -578,9 +626,20 @@ async function searchLabour({ shops, start, end, groupBy, employeeName, limit, o
   const { shiftRows, dailyCostRows, costToday, incompleteCount, errors, note } = await getLabourShiftData(resolvedShops, start, end);
 
   let filteredRows = shiftRows;
-  if (employeeName && employeeName.trim()) {
+  let matchNote = null;
+  if (idFilter.size > 0) {
+    filteredRows = shiftRows.filter((r) => idFilter.has(r.userId));
+  } else if (employeeName && employeeName.trim()) {
     const needle = employeeName.trim().toLowerCase();
     filteredRows = shiftRows.filter((r) => r.userName.toLowerCase().includes(needle));
+    const distinctIds = new Set(filteredRows.map((r) => r.userId));
+    if (distinctIds.size > 1) {
+      // Ambiguous name match — never combine different people's hours.
+      // Force per-employee grouping regardless of what was asked for.
+      effectiveGroupBy = "employee";
+      const names = [...new Set(filteredRows.map((r) => r.userName))];
+      matchNote = `"${employeeName}" matched ${distinctIds.size} different people (${names.join(", ")}) — showing each separately. Use employeeId to target just one.`;
+    }
   }
   const roster = [...new Set(shiftRows.map((r) => r.userName))].sort();
 
@@ -594,7 +653,7 @@ async function searchLabour({ shops, start, end, groupBy, employeeName, limit, o
   for (const r of filteredRows) {
     const key = keyFor(r);
     if (!groups[key]) groups[key] = { label: key, totalHours: 0 };
-    groups[key].totalHours += r.hours;
+    groups[key].totalHours += r.hours || 0;
   }
   let groupList = Object.values(groups).sort((a, b) => b.totalHours - a.totalHours);
 
@@ -603,32 +662,65 @@ async function searchLabour({ shops, start, end, groupBy, employeeName, limit, o
   const text = withCurrency(formatLabourPart(labourPart));
 
   const header = [`LABOUR — ${start} to ${end} (grouped by ${effectiveGroupBy})`, `(${note})`];
-  if (employeeName) header.push(`Filtered to employees matching "${employeeName}"`);
+  if (matchNote) header.push(`NOTE: ${matchNote}`);
+  else if (employeeName) header.push(`Filtered to employees matching "${employeeName}"`);
+  else if (idFilter.size > 0) header.push(`Filtered to employee ID(s): ${[...idFilter].join(", ")}`);
   if (effectiveGroupBy === "employee" || effectiveGroupBy === "none") {
     header.push(`Roster who worked in this period: ${roster.join(", ") || "(none)"}`);
   }
 
+  // Daily/shop labour cost + % — % always wage-only / net sales, the same
+  // definition the daily report (daily_shop_snapshots) uses, so a figure
+  // quoted from here never disagrees with that report for the same day.
   const costLines = [];
   if (dailyCostRows.length > 0) {
+    const netSalesByShopDate = getNetSalesByShopDate(resolvedShops, start, end);
     const byDay = {};
     for (const r of dailyCostRows) {
-      if (!byDay[r.date]) byDay[r.date] = { shopSlug: r.shopSlug, hours: 0, costCents: 0, costWithSuperCents: 0, missing: 0 };
+      if (!byDay[r.date]) byDay[r.date] = { hours: 0, costCents: 0, costWithSuperCents: 0, missing: 0, netSalesCents: 0, hasNetSales: false };
       byDay[r.date].hours += r.totalHours;
       byDay[r.date].costCents += r.totalCostCents;
       byDay[r.date].costWithSuperCents += r.totalCostWithSuperCents;
       byDay[r.date].missing += r.missingCostShifts;
+      const netSalesCents = netSalesByShopDate[`${r.shopSlug}|${r.date}`];
+      if (netSalesCents !== undefined) {
+        byDay[r.date].netSalesCents += netSalesCents;
+        byDay[r.date].hasNetSales = true;
+      }
     }
-    costLines.push("", "Daily labour cost (wage, and wage + super):");
+    costLines.push("", "Daily labour cost (wage, and wage + super) and labour % (wage / net sales — same definition as the daily report):");
     for (const [date, s] of Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const pct = s.hasNetSales && s.netSalesCents > 0 ? ((s.costCents / s.netSalesCents) * 100).toFixed(1) + "%" : "n/a (no sales data for this day)";
       costLines.push(
-        `  ${date}: ${s.hours.toFixed(2)} hrs, ${formatMoney(s.costCents / 100)} wage (${formatMoney(s.costWithSuperCents / 100)} incl. super)${
+        `  ${date}: ${s.hours.toFixed(2)} hrs, ${formatMoney(s.costCents / 100)} wage (${formatMoney(s.costWithSuperCents / 100)} incl. super), labour % ${pct}${
           s.missing > 0 ? ` — ${s.missing} shift(s) missing a Tanda cost` : ""
         }`
       );
     }
   }
 
-  return [...header, "", text, paginationFooter(p), ...costLines].join("\n");
+  // "Say what's missing" — every labour answer names, not just counts, any
+  // shift with no clock-out in the period, plus unapproved-shift counts.
+  const missingLines = [];
+  const noClockOutRows = shiftRows.filter((r) => r.noClockOut);
+  if (noClockOutRows.length > 0) {
+    missingLines.push("", `No clock-out (${noClockOutRows.length} shift(s) — hours/cost for these are excluded from every total above):`);
+    for (const r of noClockOutRows) {
+      missingLines.push(`  ${r.userName} — ${ALL_SHOP_NAMES[r.shopSlug] || r.shopSlug} — ${r.date} — started ${formatMelbourneTimeOf(r.startTs)}`);
+    }
+  }
+  const unapprovedRows = shiftRows.filter((r) => r.status && r.status !== "APPROVED");
+  if (unapprovedRows.length > 0) {
+    missingLines.push("", `Not yet approved in Tanda (${unapprovedRows.length} shift(s) — figures may still change):`);
+    for (const r of unapprovedRows) {
+      missingLines.push(`  ${r.userName} — ${ALL_SHOP_NAMES[r.shopSlug] || r.shopSlug} — ${r.date} (${r.status})`);
+    }
+  }
+  if (noClockOutRows.length === 0 && unapprovedRows.length === 0 && Object.keys(errors).length === 0) {
+    missingLines.push("", "Nothing missing — every shift in this period has a clock-out and is approved.");
+  }
+
+  return [...header, "", text, paginationFooter(p), ...costLines, ...missingLines].join("\n");
 }
 
 // ---------- Invoices (what a shop was charged by the central kitchen) ----------
@@ -951,13 +1043,15 @@ function getServer() {
     "search_labour",
     {
       description:
-        "Search rosters/labour: who worked, hours, labour cost (wage and wage+super), by shop/date range. groupBy employee/day/shop/none groups hours per that dimension and always appends a daily labour cost breakdown; groupBy hour gives labour cost per hour of the day (e.g. 4-5pm) for the historical part of the range — today is excluded from hourly since Tanda has no live hour-by-hour cost breakdown for an in-progress day. Past dates are instant (from the saved snapshot store); today is always live. Read-only.",
+        "Search rosters/labour: who worked, hours, labour cost (wage and wage+super) and labour % (wage/net sales — same definition as the daily report), by shop/date range. Always names (not just counts) any shift with no clock-out, and lists any unapproved shift. groupBy employee/day/shop/none groups hours per that dimension and appends a daily labour cost+% breakdown; groupBy hour gives labour cost per hour of the day (e.g. 4-5pm) for the historical part of the range — today excluded there (no live hourly breakdown from Tanda). Prefer employeeId over employeeName — a name can match more than one person (e.g. two Alexes); if it does, each person is listed separately rather than combined. Past dates are instant (saved snapshot store); today is always live. Read-only.",
       inputSchema: {
         shops: shopsField,
         start: startField,
         end: endField,
         groupBy: z.enum(["employee", "day", "shop", "hour", "none"]).optional().describe("Default: employee"),
-        employeeName: z.string().optional().describe("Filter to employees whose name contains this text (ignored for groupBy hour)"),
+        employeeId: z.number().int().optional().describe("Tanda user ID — exact match, no ambiguity. Preferred over employeeName."),
+        employeeIds: z.array(z.number().int()).optional().describe("Multiple Tanda user IDs, each shown separately"),
+        employeeName: z.string().optional().describe("Filter to employees whose name contains this text — if it matches 2+ people, each is shown separately, not combined"),
         limit: limitField,
         offset: offsetField,
       },
@@ -1079,7 +1173,7 @@ function getServer() {
     },
     async ({ shops, start, end, focusMetric }) => {
       if (!validDateRange(start, end)) return { content: [{ type: "text", text: "Invalid date range." }] };
-      const result = buildReportSearchPart(db, { shops: resolveShops(shops), start, end, focusMetric, rank: false, rankOrder: "desc" });
+      const result = buildReportSearchPart(db, { shops: resolveShops(shops).map(toReportingSlug), start, end, focusMetric, rank: false, rankOrder: "desc" });
       return { content: [{ type: "text", text: withCurrency(formatReportPart(result)) }] };
     }
   );
@@ -1092,7 +1186,7 @@ function getServer() {
       inputSchema: { shops: shopsField },
     },
     async ({ shops }) => {
-      const result = buildCogsSearchPart({ shops: resolveShops(shops) });
+      const result = buildCogsSearchPart({ shops: resolveShops(shops).map(toReportingSlug) });
       return { content: [{ type: "text", text: withCurrency(formatCogsPart(result)) }] };
     }
   );

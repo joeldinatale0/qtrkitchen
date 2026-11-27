@@ -232,6 +232,19 @@ async function fetchTandaShifts(dateStr) {
   return res.json();
 }
 
+// The ROSTER (planned/scheduled shifts) — a separate Tanda resource from
+// /shifts (actual worked time/timesheets) above. Confirmed live: returns
+// {user_id, start, finish, breaks, department_id, acceptance_status, ...}.
+// Used for "rostered vs worked so far" on today only — this app never
+// persists roster data, it's a live-only lookup.
+async function fetchTandaSchedules(dateStr) {
+  const res = await fetch(`${TANDA_API_BASE}/schedules?from=${dateStr}&to=${dateStr}`, {
+    headers: tandaHeaders(),
+  });
+  if (!res.ok) throw new Error(`Tanda schedules failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 // Only used for TODAY — an in-progress shift usually has no `cost` yet from
 // show_costs (it's computed from a finished shift), so the real-time
 // tracker is still the right source while someone is still clocked in.
@@ -1798,6 +1811,7 @@ module.exports = {
   cogsDisplayName,
   fetchTandaDepartmentIds,
   fetchTandaShifts,
+  fetchTandaSchedules,
   fetchTandaShiftsRange,
   fetchTandaLiveLabourCost,
   fetchLabourDataForShops,

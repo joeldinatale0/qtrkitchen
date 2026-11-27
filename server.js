@@ -23,7 +23,15 @@ const {
   fetchTandaUsers,
 } = require("./shop-reports");
 const { createMcpRouter } = require("./mcp-server");
-const { runNightlySnapshotIfDue, runBackfill, getBackfillStatus, getDataHealth } = require("./snapshot-jobs");
+const {
+  runNightlySnapshotIfDue,
+  runBackfill,
+  getBackfillStatus,
+  getDataHealth,
+  listSalariedRates,
+  setSalariedRate,
+  removeSalariedRate,
+} = require("./snapshot-jobs");
 const { runLabourAudit, getLabourAuditStatus } = require("./labour-audit");
 
 const app = express();
@@ -2160,6 +2168,27 @@ app.post("/kitchen/admin/labour-audit", requireAuth, requireRole("kitchen"), (re
 
 app.get("/kitchen/admin/labour-audit/status", requireAuth, requireRole("kitchen"), (req, res) => {
   res.json(getLabourAuditStatus());
+});
+
+// Staff paid a flat daily rate rather than Tanda's hourly award costing —
+// see salaried_staff_rates in db.js and the override in snapshot-jobs.js.
+app.get("/kitchen/admin/salaried-staff", requireAuth, requireRole("kitchen"), (req, res) => {
+  res.render("kitchen-salaried-staff", { rates: listSalariedRates(db), saved: req.query.saved === "1" });
+});
+
+app.post("/kitchen/admin/salaried-staff", requireAuth, requireRole("kitchen"), (req, res) => {
+  const { tanda_user_id, user_name, daily_salary } = req.body;
+  const userId = Number(tanda_user_id);
+  const salaryCents = Math.round(Number(daily_salary) * 100);
+  if (userId && user_name && user_name.trim() && salaryCents > 0) {
+    setSalariedRate(db, userId, user_name.trim(), salaryCents);
+  }
+  res.redirect("/kitchen/admin/salaried-staff?saved=1");
+});
+
+app.post("/kitchen/admin/salaried-staff/:tandaUserId/delete", requireAuth, requireRole("kitchen"), (req, res) => {
+  removeSalariedRate(db, Number(req.params.tandaUserId));
+  res.redirect("/kitchen/admin/salaried-staff?saved=1");
 });
 
 // TEMP: probe Tanda's schedules endpoint (roster/planned shifts, distinct

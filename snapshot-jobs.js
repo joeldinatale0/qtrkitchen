@@ -114,6 +114,13 @@ async function snapshotSquareDay(db, shopSlug, dateStr, isBackfill) {
   tx();
 }
 
+function getSalariedRatesByUserId(db) {
+  const rows = db.prepare("SELECT tanda_user_id, daily_salary_cents FROM salaried_staff_rates").all();
+  const map = {};
+  for (const r of rows) map[r.tanda_user_id] = r.daily_salary_cents;
+  return map;
+}
+
 async function snapshotTandaDay(db, shopSlug, dateStr, isBackfill) {
   const config = SHOP_INTEGRATIONS[shopSlug];
   if (!config) throw new Error(`No Tanda integration for ${shopSlug}`);
@@ -126,34 +133,57 @@ async function snapshotTandaDay(db, shopSlug, dateStr, isBackfill) {
   ]);
   const userNames = {};
   users.forEach((u) => (userNames[u.id] = (u.name || "").trim() || `Employee #${u.id}`));
+  const salariedRates = getSalariedRatesByUserId(db);
 
   const buckets = hourBucketsUtc(dateStr);
-  let totalHours = 0;
-  let totalCostCents = 0;
-  let missingCostShifts = 0;
+  let missingCostShifts = 0; // has a finish time, but Tanda still gave no cost
+  let noClockOutCount = 0; // no finish time at all
   const hourlyMap = {};
   const shiftRows = [];
+  const hoursByUser = {}; // for the salaried-override pass below
 
   for (const shift of allShifts) {
     if (!deptIds.has(shift.department_id)) continue;
-    if (!shift.start || !shift.finish) continue; // an open/incomplete shift on a PAST day is a Tanda data issue, not something to guess at here
+    const userName = userNames[shift.user_id] || `Employee #${shift.user_id}`;
+
+    if (!shift.start || !shift.finish) {
+      // No clock-out — saved (not dropped) so it can be named, not just
+      // counted. Can't compute hours/cost without a finish time.
+      noClockOutCount++;
+      shiftRows.push({
+        userId: shift.user_id,
+        userName,
+        start: shift.start || null,
+        finish: null,
+        hours: null,
+        breakMinutes: Number(shift.break_length) || 0,
+        costCents: null,
+        costSource: "missing",
+        status: shift.status || null,
+        noClockOut: 1,
+      });
+      continue;
+    }
+
     const hours = Math.max((shift.finish - shift.start) / 3600 - (Number(shift.break_length) || 0) / 60, 0);
     if (hours <= 0) continue;
     const hasCost = typeof shift.cost === "number";
     const costCents = hasCost ? Math.round(shift.cost * 100) : null;
     if (!hasCost) missingCostShifts++;
-    totalHours += hours;
-    if (hasCost) totalCostCents += costCents;
+
+    hoursByUser[shift.user_id] = (hoursByUser[shift.user_id] || 0) + hours;
 
     shiftRows.push({
       userId: shift.user_id,
-      userName: userNames[shift.user_id] || `Employee #${shift.user_id}`,
+      userName,
       start: shift.start,
       finish: shift.finish,
       hours,
       breakMinutes: Number(shift.break_length) || 0,
       costCents,
       costSource: hasCost ? "tanda" : "missing",
+      status: shift.status || null,
+      noClockOut: 0,
     });
 
     if (hasCost) {
@@ -190,17 +220,39 @@ async function snapshotTandaDay(db, shopSlug, dateStr, isBackfill) {
     }
   }
 
+  // Salaried override: replace this person's Tanda-costed shift(s) for the
+  // day with their flat daily rate instead — applies once per person per
+  // day, regardless of how many shifts they have that day. Hours are left
+  // as Tanda reported them (still useful to know how long they were there);
+  // only the $ cost is overridden.
+  for (const s of shiftRows) {
+    if (s.noClockOut) continue;
+    const rate = salariedRates[s.userId];
+    if (rate === undefined) continue;
+    if (s.costSource === "salaried") continue; // already applied to this user's first shift today
+    const alreadyApplied = shiftRows.some((other) => other !== s && other.userId === s.userId && other.costSource === "salaried");
+    if (alreadyApplied) {
+      s.costCents = 0; // the day's salary is carried on the first shift only, so totals aren't double-counted
+      s.costSource = "salaried";
+    } else {
+      s.costCents = rate;
+      s.costSource = "salaried";
+    }
+  }
+
+  const totalHours = shiftRows.reduce((sum, s) => sum + (s.hours || 0), 0);
+  const totalCostCents = shiftRows.reduce((sum, s) => sum + (s.costCents || 0), 0);
   const totalCostWithSuperCents = Math.round(totalCostCents * (1 + SUPER_GUARANTEE_RATE));
 
   const tx = db.transaction(() => {
     db.prepare("DELETE FROM tanda_shifts WHERE shop_slug = ? AND date = ?").run(shopSlug, dateStr);
     const insertShift = db.prepare(
       `INSERT INTO tanda_shifts
-         (shop_slug, date, tanda_user_id, user_name, start_ts, finish_ts, hours, break_minutes, cost_cents, cost_source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (shop_slug, date, tanda_user_id, user_name, start_ts, finish_ts, hours, break_minutes, cost_cents, cost_source, status, no_clock_out)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     for (const s of shiftRows) {
-      insertShift.run(shopSlug, dateStr, s.userId, s.userName, s.start, s.finish, s.hours, s.breakMinutes, s.costCents, s.costSource);
+      insertShift.run(shopSlug, dateStr, s.userId, s.userName, s.start, s.finish, s.hours, s.breakMinutes, s.costCents, s.costSource, s.status, s.noClockOut);
     }
 
     db.prepare("DELETE FROM tanda_daily_labour WHERE shop_slug = ? AND date = ?").run(shopSlug, dateStr);
@@ -215,6 +267,8 @@ async function snapshotTandaDay(db, shopSlug, dateStr, isBackfill) {
     for (const [hour, v] of Object.entries(hourlyMap)) insertHourly.run(shopSlug, dateStr, Number(hour), v.hours, Math.round(v.costCents));
   });
   tx();
+
+  return { noClockOutCount, missingCostShifts };
 }
 
 async function snapshotShopDay(db, shopSlug, dateStr, { isBackfill = false } = {}) {
@@ -255,6 +309,7 @@ async function snapshotShopDay(db, shopSlug, dateStr, { isBackfill = false } = {
 // ---------- Nightly scheduler (1am Melbourne time, yesterday's data) ----------
 
 let nightlyRunInProgress = false;
+let lastRecheckDate = null; // guards the 3-day re-check to once per night
 
 // Called from a setInterval in server.js, same pattern as this app's other
 // *IfDue jobs — only actually runs work during the 1am Melbourne hour, and
@@ -266,40 +321,83 @@ async function runNightlySnapshotIfDue(db, sendEmail, alertEmailTo) {
   if (melbourneHour !== 1) return;
   if (nightlyRunInProgress) return;
 
-  const yesterday = addDaysISO(todayMelbourneStr(), -1);
+  const todayStr = todayMelbourneStr();
+  const yesterday = addDaysISO(todayStr, -1);
   const allDone = REPORTING_SHOP_SLUGS.every((slug) => {
     const row = db.prepare("SELECT square_status, tanda_status FROM nightly_snapshot_log WHERE shop_slug = ? AND date = ?").get(slug, yesterday);
     return row && row.square_status === "ok" && row.tanda_status === "ok";
   });
-  if (allDone) return;
 
   nightlyRunInProgress = true;
   try {
-    for (const slug of REPORTING_SHOP_SLUGS) {
-      const row = db
-        .prepare("SELECT square_status, tanda_status, retry_count FROM nightly_snapshot_log WHERE shop_slug = ? AND date = ?")
-        .get(slug, yesterday);
-      if (row && row.square_status === "ok" && row.tanda_status === "ok") continue;
-      if (row && row.retry_count >= 5) continue; // stop retrying tonight — already alerted below on attempt 3
-
-      const result = await snapshotShopDay(db, slug, yesterday, { isBackfill: false });
-      if (result.squareStatus === "failed" || result.tandaStatus === "failed") {
-        const updated = db
-          .prepare("SELECT retry_count, alert_sent FROM nightly_snapshot_log WHERE shop_slug = ? AND date = ?")
+    if (!allDone) {
+      for (const slug of REPORTING_SHOP_SLUGS) {
+        const row = db
+          .prepare("SELECT square_status, tanda_status, retry_count FROM nightly_snapshot_log WHERE shop_slug = ? AND date = ?")
           .get(slug, yesterday);
-        if (updated && updated.retry_count >= 2 && !updated.alert_sent && sendEmail) {
-          try {
-            await sendEmail({
-              to: alertEmailTo,
-              subject: `Nightly snapshot failed — ${slug} — ${yesterday}`,
-              text: `The nightly Square/Tanda snapshot for ${slug} on ${yesterday} has failed ${updated.retry_count} time(s).\n\n${result.errors.join("\n")}\n\nCheck /kitchen/admin/data-health.`,
-            });
-            db.prepare("UPDATE nightly_snapshot_log SET alert_sent = 1 WHERE shop_slug = ? AND date = ?").run(slug, yesterday);
-          } catch (err) {
-            console.error("Failed to send snapshot failure alert:", err.message);
+        if (row && row.square_status === "ok" && row.tanda_status === "ok") continue;
+        if (row && row.retry_count >= 5) continue; // stop retrying tonight — already alerted below on attempt 3
+
+        const result = await snapshotShopDay(db, slug, yesterday, { isBackfill: false });
+        if (result.squareStatus === "failed" || result.tandaStatus === "failed") {
+          const updated = db
+            .prepare("SELECT retry_count, alert_sent FROM nightly_snapshot_log WHERE shop_slug = ? AND date = ?")
+            .get(slug, yesterday);
+          if (updated && updated.retry_count >= 2 && !updated.alert_sent && sendEmail) {
+            try {
+              await sendEmail({
+                to: alertEmailTo,
+                subject: `Nightly snapshot failed — ${slug} — ${yesterday}`,
+                text: `The nightly Square/Tanda snapshot for ${slug} on ${yesterday} has failed ${updated.retry_count} time(s).\n\n${result.errors.join("\n")}\n\nCheck /kitchen/admin/data-health.`,
+              });
+              db.prepare("UPDATE nightly_snapshot_log SET alert_sent = 1 WHERE shop_slug = ? AND date = ?").run(slug, yesterday);
+            } catch (err) {
+              console.error("Failed to send snapshot failure alert:", err.message);
+            }
           }
         }
       }
+    }
+
+    // Tanda timesheets can be approved or edited a day or two after the
+    // fact — re-pulling just yesterday once, the night after, isn't enough
+    // to catch that. Re-check the last 3 days every night (once per night,
+    // guarded by lastRecheckDate) and alert if a re-pull actually changes
+    // the saved hours/cost for a day thought to be final.
+    if (lastRecheckDate !== todayStr) {
+      for (let i = 1; i <= 3; i++) {
+        const dateStr = addDaysISO(todayStr, -i);
+        for (const slug of REPORTING_SHOP_SLUGS) {
+          const before = db.prepare("SELECT total_hours, total_cost_cents FROM tanda_daily_labour WHERE shop_slug = ? AND date = ?").get(slug, dateStr);
+          let result;
+          try {
+            result = await snapshotShopDay(db, slug, dateStr, { isBackfill: false });
+          } catch (err) {
+            console.error(`Nightly 3-day re-check failed for ${slug} ${dateStr}:`, err.message);
+            continue;
+          }
+          if (result.tandaStatus === "failed") {
+            console.error(`Nightly 3-day re-check failed for ${slug} ${dateStr}: ${result.errors.join("; ")}`);
+            continue;
+          }
+          const after = db.prepare("SELECT total_hours, total_cost_cents FROM tanda_daily_labour WHERE shop_slug = ? AND date = ?").get(slug, dateStr);
+          if (before && after && (Math.abs(before.total_hours - after.total_hours) > 0.01 || before.total_cost_cents !== after.total_cost_cents)) {
+            console.log(`Labour re-check changed ${slug} ${dateStr}: ${before.total_hours.toFixed(2)}hrs/$${(before.total_cost_cents / 100).toFixed(2)} -> ${after.total_hours.toFixed(2)}hrs/$${(after.total_cost_cents / 100).toFixed(2)}`);
+            if (sendEmail) {
+              try {
+                await sendEmail({
+                  to: alertEmailTo,
+                  subject: `Labour data changed on re-check — ${slug} — ${dateStr}`,
+                  text: `Tanda's data for ${dateStr} (${slug}) changed since it was first saved — likely a late approval or edit.\n\nBefore: ${before.total_hours.toFixed(2)} hrs, $${(before.total_cost_cents / 100).toFixed(2)}\nAfter: ${after.total_hours.toFixed(2)} hrs, $${(after.total_cost_cents / 100).toFixed(2)}`,
+                });
+              } catch (err) {
+                console.error("Failed to send re-check change alert:", err.message);
+              }
+            }
+          }
+        }
+      }
+      lastRecheckDate = todayStr;
     }
   } finally {
     nightlyRunInProgress = false;
@@ -434,6 +532,23 @@ function getDataHealth(db, daysBack = 30) {
   });
 }
 
+// ---------- Salaried staff rate management ----------
+
+function listSalariedRates(db) {
+  return db.prepare("SELECT * FROM salaried_staff_rates ORDER BY user_name").all();
+}
+
+function setSalariedRate(db, tandaUserId, userName, dailySalaryCents) {
+  db.prepare(
+    `INSERT INTO salaried_staff_rates (tanda_user_id, user_name, daily_salary_cents) VALUES (?, ?, ?)
+     ON CONFLICT(tanda_user_id) DO UPDATE SET user_name = excluded.user_name, daily_salary_cents = excluded.daily_salary_cents`
+  ).run(tandaUserId, userName, dailySalaryCents);
+}
+
+function removeSalariedRate(db, tandaUserId) {
+  db.prepare("DELETE FROM salaried_staff_rates WHERE tanda_user_id = ?").run(tandaUserId);
+}
+
 module.exports = {
   SUPER_GUARANTEE_RATE,
   REPORTING_SHOP_SLUGS,
@@ -451,4 +566,7 @@ module.exports = {
   readTandaHourlyLabour,
   isFullyHistorical,
   getDataHealth,
+  listSalariedRates,
+  setSalariedRate,
+  removeSalariedRate,
 };
