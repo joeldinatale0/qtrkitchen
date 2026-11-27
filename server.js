@@ -21,6 +21,8 @@ const {
   formatNaturalSearchEmail,
   buildCateringOrders,
   fetchTandaUsers,
+  melbourneDayRangeUtc,
+  fetchSquareOrders,
 } = require("./shop-reports");
 const { createMcpRouter } = require("./mcp-server");
 
@@ -2120,26 +2122,8 @@ app.get("/kitchen/admin/debug-tanda-shape", requireAuth, requireRole("kitchen"),
 
     let sampleOrder = null;
     try {
-      const [y, m, d] = date.split("-").map(Number);
-      const startUtc = new Date(Date.UTC(y, m - 1, d, -11, 0, 0)); // approx AEDT offset, fine for a one-off probe
-      const endUtc = new Date(startUtc.getTime() + 24 * 60 * 60 * 1000);
-      const squareRes = await fetch(`https://connect.squareup.com/v2/orders/search`, {
-        method: "POST",
-        headers: {
-          "Square-Version": "2025-01-23",
-          Authorization: `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          location_ids: ["LJWTC3VTB52T3"],
-          limit: 100,
-          query: {
-            filter: { date_time_filter: { created_at: { start_at: startUtc.toISOString(), end_at: endUtc.toISOString() } }, state_filter: { states: ["COMPLETED"] } },
-          },
-        }),
-      });
-      const squareData = await squareRes.json();
-      const orders = squareData.orders || [];
+      const { startUtc, endUtc } = melbourneDayRangeUtc(date);
+      const orders = await fetchSquareOrders("SQUARE_ACCESS_TOKEN", "LJWTC3VTB52T3", startUtc, endUtc);
       sampleOrder = orders.find((o) => (o.discounts || []).length > 0) || orders[0] || null;
     } catch (err) {
       sampleOrder = { error: err.message };
