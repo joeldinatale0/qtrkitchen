@@ -25,6 +25,7 @@ const {
   SQUARE_API_BASE,
   squareHeaders,
   fetchSquareOrders,
+  fetchSquareRefunds,
   melbourneDayRangeUtc,
   melbourneHourOf,
   summarizeSquareOrders,
@@ -353,21 +354,6 @@ async function searchSquareSales({ shops, start, end, groupBy, itemNameContains,
   }
 
   return lines.join("\n");
-}
-
-async function fetchSquareRefunds(tokenEnvVar, locationId, beginTimeIso, endTimeIso) {
-  const refunds = [];
-  let cursor;
-  do {
-    const params = new URLSearchParams({ location_id: locationId, begin_time: beginTimeIso, end_time: endTimeIso, sort_order: "ASC" });
-    if (cursor) params.set("cursor", cursor);
-    const res = await fetch(`${SQUARE_API_BASE}/refunds?${params.toString()}`, { headers: squareHeaders(tokenEnvVar) });
-    if (!res.ok) throw new Error(`Square refunds failed: ${res.status} ${await res.text()}`);
-    const data = await res.json();
-    refunds.push(...(data.refunds || []));
-    cursor = data.cursor;
-  } while (cursor);
-  return refunds;
 }
 
 async function searchSquareRefunds({ shops, start, end, limit, offset }) {

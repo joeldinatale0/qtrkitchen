@@ -1,0 +1,86 @@
+<%- include('partials/head', { title: "Data Health — QTR Kitchen Ordering" }) %>
+<%- include('partials/topbar') %>
+
+<div class="container">
+  <h1>Square / Tanda Data Health</h1>
+  <p class="subtitle">
+    The permanent nightly snapshot store — every shop's Square sales and Tanda labour data,
+    saved once per day at 1am Melbourne time and kept forever. Reporting over any past date
+    range reads from here instead of calling Square/Tanda live.
+  </p>
+
+  <% if (started) { %>
+    <div class="success-banner">Backfill started — this runs in the background, refresh this page to see progress.</div>
+  <% } %>
+  <% if (alreadyRunning) { %>
+    <div class="error">A backfill is already running — wait for it to finish before starting another.</div>
+  <% } %>
+
+  <div class="card">
+    <h2 style="margin-top: 0;">Backfill</h2>
+    <% if (backfill.inProgress) { %>
+      <p>
+        Running: <%= backfill.progress.done %> / <%= backfill.progress.total %> shop-days done
+        (started <%= backfill.progress.startedAt %>)
+        <% if (backfill.progress.errors.length > 0) { %>
+          — <%= backfill.progress.errors.length %> error(s) so far
+        <% } %>
+      </p>
+    <% } else if (backfill.progress) { %>
+      <p class="muted">
+        Last run: <%= backfill.progress.startedAt %> to <%= backfill.progress.finishedAt %>
+        (<%= backfill.progress.done %> / <%= backfill.progress.total %> shop-days,
+        <%= backfill.progress.errors.length %> error(s))
+      </p>
+      <% if (backfill.progress.errors.length > 0) { %>
+        <ul class="muted">
+          <% backfill.progress.errors.forEach(function(e) { %><li><%= e %></li><% }) %>
+        </ul>
+      <% } %>
+    <% } else { %>
+      <p class="muted">Never run yet.</p>
+    <% } %>
+
+    <form method="POST" action="/kitchen/admin/data-health/backfill" style="margin-top: 12px;">
+      <label for="days">Days to backfill</label>
+      <input type="number" id="days" name="days" value="30" min="1" max="90" style="width: 100px; margin-bottom: 12px;" />
+      <button class="btn btn-filled" type="submit">Run Backfill</button>
+    </form>
+  </div>
+
+  <h2 style="margin-top: 32px;">Per Shop</h2>
+  <% health.forEach(function(h) { %>
+    <div class="card" style="margin-bottom: 16px;">
+      <p class="item-name" style="margin-top: 0; margin-bottom: 8px;"><%= h.displayName %></p>
+      <p class="muted" style="margin: 0;">Last saved Square day: <strong><%= h.lastSquareDate || "never" %></strong></p>
+      <p class="muted" style="margin: 0;">Last saved Tanda day: <strong><%= h.lastTandaDate || "never" %></strong></p>
+
+      <% if (h.missingDays.length === 0) { %>
+        <p style="margin-top: 8px;">No missing days in the last 30.</p>
+      <% } else { %>
+        <p style="margin-top: 8px;"><strong><%= h.missingDays.length %></strong> missing day(s) in the last 30:</p>
+        <p class="muted"><%= h.missingDays.join(", ") %></p>
+      <% } %>
+
+      <% if (h.recentFailures.length > 0) { %>
+        <table style="margin-top: 8px;">
+          <thead><tr><th>Date</th><th>Square</th><th>Tanda</th><th>Retries</th><th>Error</th></tr></thead>
+          <tbody>
+            <% h.recentFailures.forEach(function(f) { %>
+              <tr>
+                <td><%= f.date %></td>
+                <td><%= f.square_status %></td>
+                <td><%= f.tanda_status %></td>
+                <td><%= f.retry_count %></td>
+                <td class="muted"><%= f.error_message %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  <% }) %>
+</div>
+
+</body>
+</html>

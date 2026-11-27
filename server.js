@@ -25,6 +25,7 @@ const {
   fetchSquareOrders,
 } = require("./shop-reports");
 const { createMcpRouter } = require("./mcp-server");
+const { runNightlySnapshotIfDue, runBackfill, getBackfillStatus, getDataHealth } = require("./snapshot-jobs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -561,6 +562,11 @@ setInterval(sendDailyBackupIfDue, 1000 * 60 * 60); // check hourly
 setInterval(sendWeeklySummaryIfDue, 1000 * 60 * 60);
 setInterval(sendDailyShopReportsIfDue, 1000 * 60 * 60);
 setInterval(sendCookieBakeListIfDue, 1000 * 60 * 60);
+// Checked every 10 min (not hourly, like the jobs above) so a failed
+// attempt gets several retries within the 1am Melbourne hour itself, not
+// just one shot per night — see runNightlySnapshotIfDue's own internal
+// retry-count/alert logic for when it gives up and emails instead.
+setInterval(() => runNightlySnapshotIfDue(db, sendEmail, DAILY_REPORT_EMAIL_TO), 1000 * 60 * 10);
 sendDailyBackupIfDue();
 sendWeeklySummaryIfDue();
 sendDailyShopReportsIfDue();
@@ -2153,6 +2159,29 @@ app.post("/kitchen/items/:id/delete", requireAuth, requireRole("kitchen"), (req,
 });
 
 // ---------- Kitchen: daily shop reports (Square + Tanda) ----------
+
+// Monitoring page for the permanent Square/Tanda snapshot store: last saved
+// day per shop, any missing days in the last 30, and recent save failures.
+app.get("/kitchen/admin/data-health", requireAuth, requireRole("kitchen"), (req, res) => {
+  const health = getDataHealth(db);
+  const backfill = getBackfillStatus();
+  res.render("kitchen-data-health", {
+    health,
+    backfill,
+    started: req.query.started === "1",
+    alreadyRunning: req.query.alreadyRunning === "1",
+  });
+});
+
+app.post("/kitchen/admin/data-health/backfill", requireAuth, requireRole("kitchen"), (req, res) => {
+  const days = Math.min(Math.max(Number(req.body.days) || 30, 1), 90);
+  const result = runBackfill(db, days);
+  res.redirect(`/kitchen/admin/data-health?${result.started ? "started=1" : "alreadyRunning=1"}`);
+});
+
+app.get("/kitchen/admin/data-health/backfill-status", requireAuth, requireRole("kitchen"), (req, res) => {
+  res.json(getBackfillStatus());
+});
 
 app.get("/kitchen/reports", requireAuth, requireRole("kitchen"), (req, res) => {
   const shops = Object.entries(SHOP_INTEGRATIONS).map(([slug, config]) => ({

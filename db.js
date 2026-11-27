@@ -306,6 +306,118 @@ db.exec(`
     par_standard TEXT,
     needs_topup INTEGER NOT NULL DEFAULT 0
   );
+
+  -- Permanent Square/Tanda data store (see snapshot-jobs.js), so reporting
+  -- over any past date range reads from here instead of calling Square/Tanda
+  -- live every time. shop_slug here is the REPORTING slug (essendon,
+  -- highpoint, quartertwo — see SHOP_INTEGRATIONS in shop-reports.js), not
+  -- the ordering-side slug (mooneeponds for Quarter Two) — this subsystem
+  -- never touches the ordering/invoices tables, so there's no need to
+  -- translate between the two here. Never overwritten by date — a re-run
+  -- for an already-saved date replaces that date's own rows only.
+  CREATE TABLE IF NOT EXISTS square_daily_totals (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    gross_sales_cents INTEGER NOT NULL,
+    net_sales_cents INTEGER NOT NULL,
+    discounts_cents INTEGER NOT NULL,
+    refunds_cents INTEGER NOT NULL,
+    transaction_count INTEGER NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('live', 'backfilled')),
+    saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (shop_slug, date)
+  );
+
+  CREATE TABLE IF NOT EXISTS square_item_sales (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    variation_name TEXT NOT NULL DEFAULT '',
+    quantity REAL NOT NULL,
+    net_revenue_cents INTEGER NOT NULL,
+    PRIMARY KEY (shop_slug, date, item_name, variation_name)
+  );
+
+  CREATE TABLE IF NOT EXISTS square_hourly_sales (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    net_sales_cents INTEGER NOT NULL,
+    transaction_count INTEGER NOT NULL,
+    PRIMARY KEY (shop_slug, date, hour)
+  );
+
+  CREATE TABLE IF NOT EXISTS square_discounts (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    discount_name TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    PRIMARY KEY (shop_slug, date, discount_name)
+  );
+
+  -- One row per actual Tanda shift. cost_source = 'missing' means Tanda's
+  -- show_costs=true gave no cost for this shift (rare in practice — every
+  -- APPROVED shift sampled during development had one) — cost_cents is
+  -- NULL in that case rather than a guessed figure: Tanda's API has no
+  -- documented endpoint for a employee's pay rate/award template to
+  -- recompute cost independently, so a missing cost is surfaced (via
+  -- tanda_daily_labour.missing_cost_shifts and the monitoring page) rather
+  -- than silently estimated.
+  CREATE TABLE IF NOT EXISTS tanda_shifts (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    tanda_user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    start_ts INTEGER NOT NULL,
+    finish_ts INTEGER NOT NULL,
+    hours REAL NOT NULL,
+    break_minutes INTEGER NOT NULL DEFAULT 0,
+    cost_cents INTEGER,
+    cost_source TEXT NOT NULL CHECK (cost_source IN ('tanda', 'missing')),
+    PRIMARY KEY (shop_slug, date, tanda_user_id, start_ts)
+  );
+
+  -- total_cost_cents is wage cost only (Tanda's own cost_breakdown has no
+  -- super field); total_cost_with_super_cents adds the super guarantee rate
+  -- below on top — see SUPER_GUARANTEE_RATE in snapshot-jobs.js.
+  CREATE TABLE IF NOT EXISTS tanda_daily_labour (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    total_hours REAL NOT NULL,
+    total_cost_cents INTEGER NOT NULL,
+    total_cost_with_super_cents INTEGER NOT NULL,
+    missing_cost_shifts INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL CHECK (source IN ('live', 'backfilled')),
+    saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (shop_slug, date)
+  );
+
+  -- Each shift's cost is prorated across the hours it overlaps (a shift
+  -- spanning 3 hours at a flat rate contributes 1/3 of its cost to each).
+  CREATE TABLE IF NOT EXISTS tanda_hourly_labour (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    hours REAL NOT NULL,
+    cost_cents INTEGER NOT NULL,
+    PRIMARY KEY (shop_slug, date, hour)
+  );
+
+  -- One row per shop per date the nightly/backfill job has attempted —
+  -- the source of truth for the monitoring page (last saved day, gaps,
+  -- retry count) and for deciding whether a date still needs (re)trying.
+  CREATE TABLE IF NOT EXISTS nightly_snapshot_log (
+    shop_slug TEXT NOT NULL,
+    date TEXT NOT NULL,
+    square_status TEXT NOT NULL CHECK (square_status IN ('ok', 'failed')),
+    tanda_status TEXT NOT NULL CHECK (tanda_status IN ('ok', 'failed')),
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    is_backfilled INTEGER NOT NULL DEFAULT 0,
+    attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    alert_sent INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (shop_slug, date)
+  );
 `);
 
 // This table briefly existed with a different (numeric par/suggested-qty)
